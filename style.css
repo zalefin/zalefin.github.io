@@ -1,0 +1,33 @@
+.wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    height: 100%;
+}
+
+.centertext {
+    display: block;
+    text-align: center;
+    color: #d5c4a1;
+    text-shadow: 0px 1px #3c3836;
+}
+
+.large-text {
+    font-size: 50px;
+}
+
+.small-text {
+    font-size: 15px;
+}
+
+body {
+    margin: 0;
+    height: 100%;
+    min-height: 100%;
+    background: #665c54;
+}
+
+html {
+    height: 100%;
+}

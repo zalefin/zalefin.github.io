@@ -45,7 +45,8 @@ body {
     margin: 0;
     height: 100%;
     min-height: 100%;
-    background: #665c54;
+    /* background: #665c54; */
+    background: linear-gradient(0deg, rgba(52,47,43,1) 0%, rgba(102,92,84,1) 24%, rgba(102,92,84,1) 100%);
 }
 
 html {

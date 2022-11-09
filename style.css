@@ -21,6 +21,26 @@
     font-size: 15px;
 }
 
+.link-logo {
+    fill: #d5c4a1;
+}
+
+.link-shadow {
+    fill: #3c3836;
+    padding-top: 2px;
+}
+
+.box {
+    position: absolute;
+    height: 32;
+    width: 32;
+}
+
+.logo {
+    height: 33px;
+    width: 33px;
+}
+
 body {
     margin: 0;
     height: 100%;

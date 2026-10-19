@@ -65,8 +65,8 @@ export function LogoTile() {
   const glow = useMotionTemplate`radial-gradient(circle at ${glowX}% ${glowY}%, rgb(${LED} / 0.35), transparent 60%)`;
   // The light the LEDs throw on the panel slides against the tilt, as if
   // the tile hovers above it.
-  const underX = useTransform(rotateY, [-MAX_TILT, MAX_TILT], [10, -10]);
-  const underY = useTransform(rotateX, [MAX_TILT, -MAX_TILT], [-5, 5]);
+  const underX = useTransform(rotateY, [-MAX_TILT, MAX_TILT], [5, -5]);
+  const underY = useTransform(rotateX, [MAX_TILT, -MAX_TILT], [-4, 4]);
 
   useEffect(() => {
     if (reduceMotion || !window.matchMedia("(hover: hover)").matches) return;
@@ -114,19 +114,19 @@ export function LogoTile() {
             ease: "easeInOut",
           }}
         >
-          {/* The light thrown on the panel below. */}
+          {/* The light thrown on the panel around the tile. */}
           <motion.div
-            className="absolute -inset-x-[18%] top-[45%] -bottom-[42%] rounded-[50%] blur-2xl"
+            className="absolute -inset-[7%] rounded-[30%] blur-xl"
             style={{
               x: underX,
               y: underY,
-              backgroundColor: `rgb(${LED} / 0.5)`,
+              backgroundColor: `rgb(${LED} / 0.4)`,
             }}
           />
-          {/* The strip's own glow, spilling out around the tile's edges. */}
+          {/* The strip's own glow, spilling out evenly around the edges. */}
           <div
-            className="absolute inset-x-[4%] top-[30%] -bottom-[8%] rounded-[22%] blur-lg"
-            style={{ backgroundColor: `rgb(${LED} / 0.85)` }}
+            className="absolute -inset-[1.5%] rounded-[23%] blur-md"
+            style={{ backgroundColor: `rgb(${LED} / 0.75)` }}
           />
           {/* The LEDs themselves, half hidden under the bottom edge. */}
           <div className="absolute inset-x-[16%] -bottom-[1.5%] flex justify-between">

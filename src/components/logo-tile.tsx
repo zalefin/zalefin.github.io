@@ -13,9 +13,9 @@ import { LOGO_PIECES, LOGO_TILE_COLOR, LOGO_VIEWBOX } from "@/lib/logo";
 
 const MAX_TILT = 14;
 
-const ASSEMBLY_START = 0.45;
-const STEP_DURATION = 0.42;
-const STEP_GAP = 0.06;
+const ASSEMBLY_START = 0.3;
+const STEP_DURATION = 0.24;
+const STEP_GAP = 0.03;
 // Accelerate, then decelerate to a dead stop: no overshoot, like a servo.
 const MACHINE_EASE = [0.65, 0, 0.35, 1] as const;
 

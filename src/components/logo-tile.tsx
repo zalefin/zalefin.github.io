@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type Transition,
   motion,
   useMotionTemplate,
   useMotionValue,
@@ -25,6 +26,20 @@ export const LOGO_ASSEMBLED_AT =
 
 // The underglow is the same LED orange in both themes.
 const LED = "254 128 25";
+
+// The LEDs flicker on together once the logo has assembled.
+const POWER_ON: Transition = {
+  duration: 0.45,
+  delay: LOGO_ASSEMBLED_AT,
+  times: [0, 0.15, 0.3, 0.5, 0.65, 1],
+  ease: "linear",
+};
+
+// A thin light strip wrapped around the tile's edge, as a ring with a little
+// glow of its own.
+const STRIP_OFF = `0 0 0 1px rgb(0 0 0 / 0.1), 0 0 0px 0px rgb(${LED} / 0)`;
+const STRIP_DIM = `0 0 0 1px rgb(255 200 150 / 0.5), 0 0 3px 0px rgb(${LED} / 0.3)`;
+const STRIP_ON = `0 0 0 1px rgb(255 200 150), 0 0 6px 0px rgb(${LED} / 0.7)`;
 
 const LIFTED = "drop-shadow(0px 3px 2px rgba(0,0,0,0.35))";
 const PLACED = "drop-shadow(0px 0px 0px rgba(0,0,0,0))";
@@ -59,9 +74,14 @@ export function LogoTile() {
     useTransform(py, [-1, 1], [MAX_TILT, -MAX_TILT]),
     spring,
   );
-  const glowX = useTransform(rotateY, [-MAX_TILT, MAX_TILT], [15, 85]);
-  const glowY = useTransform(rotateX, [MAX_TILT, -MAX_TILT], [15, 85]);
-  const glow = useMotionTemplate`radial-gradient(circle at ${glowX}% ${glowY}%, rgb(${LED} / 0.35), transparent 60%)`;
+  // Shade the side of the tile tilted away, deeper the further it tilts.
+  const shadeX = useTransform(rotateY, [-MAX_TILT, MAX_TILT], [0, 100]);
+  const shadeY = useTransform(rotateX, [MAX_TILT, -MAX_TILT], [0, 100]);
+  const shadeAlpha = useTransform(
+    () =>
+      Math.min(1, Math.hypot(rotateX.get(), rotateY.get()) / MAX_TILT) * 0.22,
+  );
+  const shade = useMotionTemplate`radial-gradient(circle at ${shadeX}% ${shadeY}%, rgb(40 40 40 / ${shadeAlpha}), transparent 70%)`;
   // The light the LEDs throw on the panel slides against the tilt, as if
   // the tile hovers above it.
   const underX = useTransform(rotateY, [-MAX_TILT, MAX_TILT], [5, -5]);
@@ -90,11 +110,26 @@ export function LogoTile() {
   return (
     <div className="perspective-[700px]">
       <motion.div
-        initial={reduceMotion ? false : { opacity: 0, scale: 0.92 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.35, ease: "easeOut", delay: 0.1 }}
+        initial={
+          reduceMotion
+            ? false
+            : { opacity: 0, scale: 0.92, boxShadow: STRIP_OFF }
+        }
+        animate={{
+          opacity: 1,
+          scale: 1,
+          boxShadow: reduceMotion
+            ? STRIP_ON
+            : [STRIP_OFF, STRIP_ON, STRIP_DIM, STRIP_ON, STRIP_DIM, STRIP_ON],
+        }}
+        transition={{
+          duration: 0.35,
+          ease: "easeOut",
+          delay: 0.1,
+          boxShadow: POWER_ON,
+        }}
         style={{ rotateX, rotateY, backgroundColor: LOGO_TILE_COLOR }}
-        className="relative size-32 rounded-[22%] ring-1 ring-black/10 transform-3d sm:size-36"
+        className="relative size-32 rounded-[22%] transform-3d sm:size-36"
       >
         {/* Orange LEDs mounted under the tile, so the glow tilts with it and
             stays behind it. They flicker on once the logo has assembled, then
@@ -105,12 +140,7 @@ export function LogoTile() {
           style={{ z: -16 }}
           initial={reduceMotion ? false : { opacity: 0 }}
           animate={{ opacity: reduceMotion ? 1 : [0, 1, 0.2, 1, 0.6, 1] }}
-          transition={{
-            duration: 0.45,
-            delay: LOGO_ASSEMBLED_AT,
-            times: [0, 0.15, 0.3, 0.5, 0.65, 1],
-            ease: "linear",
-          }}
+          transition={POWER_ON}
         >
           <motion.div
             className="absolute inset-0"
@@ -143,7 +173,7 @@ export function LogoTile() {
           <motion.div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 rounded-[inherit]"
-            style={{ background: glow }}
+            style={{ background: shade }}
           />
           <svg
             viewBox={LOGO_VIEWBOX}

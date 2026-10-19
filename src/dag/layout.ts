@@ -12,8 +12,6 @@ export type NodePlacement = {
   slot: number;
   size: number;
   jitter: number;
-  /** A stable 0..1 value for anything else that should vary per task. */
-  seed: number;
 };
 
 /**
@@ -76,7 +74,6 @@ export function layoutGraph(graph: DagGraph): Map<string, NodePlacement> {
         slot,
         size: members.length,
         jitter: noise(id, 2),
-        seed: noise(id, 3) + 0.5,
       });
     });
   });

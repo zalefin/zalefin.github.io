@@ -1,10 +1,18 @@
 import type { DagGraph } from "./types";
 
 /**
- * Where a task sits: `u` runs along the flow (0 = first layer, 1 = last) and
- * `v` across it, both 0..1. The background maps these onto the screen.
+ * Where a task sits. `u` runs along the flow, 0..1 from the first layer to the
+ * last. Across the flow, the task is at `slot` (0..1) among the `size` tasks
+ * in its layer; how far apart those are depends on the space available, so
+ * the canvas works that out when it draws.
  */
-export type NodePlacement = { u: number; v: number };
+export type NodePlacement = {
+  u: number;
+  layer: number;
+  slot: number;
+  size: number;
+  jitter: number;
+};
 
 // A small, stable per-task offset, so recompiling the same DAG doesn't move
 // anything but the layout still looks hand-placed rather than gridded.
@@ -58,10 +66,12 @@ export function layoutGraph(graph: DagGraph): Map<string, NodePlacement> {
     keyed.forEach(({ id }, i) => {
       const slot = members.length === 1 ? 0.5 : i / (members.length - 1);
       position.set(id, slot);
-      const v = members.length === 1 ? 0.5 : 0.08 + 0.84 * slot;
       placements.set(id, {
-        u: layerCount === 1 ? 0.5 : l / (layerCount - 1) + jitter(id, 1) * 0.03,
-        v: v + jitter(id, 2) * (0.35 / Math.max(2, members.length)),
+        u: layerCount === 1 ? 0.5 : l / (layerCount - 1) + jitter(id, 1) * 0.02,
+        layer: l,
+        slot,
+        size: members.length,
+        jitter: jitter(id, 2),
       });
     });
   });

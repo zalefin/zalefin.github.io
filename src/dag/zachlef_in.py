@@ -3,7 +3,7 @@ The DAG behind zachlef.in.
 
 Edit it and press compile (ctrl/cmd + enter). Pyodide runs
 this file in your browser against a stubbed-out airflow, and
-the graph in the background is rebuilt from what it defines.
+the graph is redrawn from the DAG it defines.
 """
 
 from datetime import datetime

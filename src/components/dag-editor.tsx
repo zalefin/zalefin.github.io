@@ -16,11 +16,12 @@ import { TerminalWindow } from "./terminal-window";
 
 type EditorSetup = typeof import("@/dag/editor-setup");
 
-// The background stays legible up to about this many tasks.
+// The graph stays legible up to about this many tasks.
 const MAX_TASKS = 100;
 
-// Matches Tailwind's xl breakpoint, where the editor sits beside the card.
-const WIDE_QUERY = "(min-width: 80rem)";
+// Matches Tailwind's lg breakpoint, where the editor is always open in the
+// left column.
+const WIDE_QUERY = "(min-width: 64rem)";
 const subscribeWide = (onChange: () => void) => {
   const query = window.matchMedia(WIDE_QUERY);
   query.addEventListener("change", onChange);
@@ -68,7 +69,7 @@ export function DagEditor({
     } else if (result.graph.tasks.length > MAX_TASKS) {
       next = {
         ok: false,
-        message: `too many tasks (${result.graph.tasks.length}); the background draws up to ${MAX_TASKS}`,
+        message: `too many tasks (${result.graph.tasks.length}); the graph draws up to ${MAX_TASKS}`,
         line: null,
       };
     } else {
@@ -127,7 +128,7 @@ export function DagEditor({
     return () => clearTimeout(timer);
   }, [onScreen, wide, preloadAfter, preload]);
 
-  // Then compile the shipped DAG, so Pyodide draws the background rather
+  // Then compile the shipped DAG, so Pyodide draws the graph rather
   // than the build-time snapshot.
   const compiledOnce = useRef(false);
   useEffect(() => {
@@ -165,13 +166,13 @@ export function DagEditor({
   }
 
   return (
-    <div className="flex w-full max-w-xl min-w-0 flex-col items-center gap-3 xl:w-[36rem] xl:max-w-none xl:shrink-0">
+    <div className="flex w-full max-w-xl min-w-0 flex-col items-center gap-3 lg:h-full lg:min-h-0 lg:max-w-none">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls="dag-editor"
-        className="rounded-lg border border-panel-border bg-panel px-4 py-2 text-sm text-fg-muted backdrop-blur-md transition-colors hover:text-orange xl:hidden"
+        className="rounded-lg border border-panel-border bg-panel px-4 py-2 text-sm text-fg-muted backdrop-blur-md transition-colors hover:text-orange lg:hidden"
       >
         <span className="text-orange">{"</>"}</span>{" "}
         {open ? "hide the dag" : "edit the dag"}
@@ -180,14 +181,14 @@ export function DagEditor({
       <motion.section
         id="dag-editor"
         aria-label="Airflow DAG editor"
-        initial={reduceMotion ? false : { opacity: 0, x: 24 }}
-        animate={{ opacity: 1, x: 0 }}
+        initial={reduceMotion ? false : { opacity: 0, y: 16 }}
+        animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, delay: 0.35, ease: [0.22, 1, 0.36, 1] }}
-        className={`${open ? "flex" : "hidden"} w-full flex-1 flex-col xl:flex`}
+        className={`${open ? "flex" : "hidden"} w-full flex-1 flex-col lg:flex lg:min-h-0`}
       >
         <TerminalWindow
           title="~/dags/zachlef_in.py"
-          className="flex-1"
+          className="flex-1 lg:min-h-0"
           actions={
             <>
               <span className="hidden text-[11px] text-fg-faint sm:inline">
@@ -204,7 +205,7 @@ export function DagEditor({
             </>
           }
         >
-          <div className="relative h-80 min-h-0 text-left xl:h-auto xl:min-h-88 xl:flex-1">
+          <div className="relative h-80 min-h-0 text-left lg:h-auto lg:min-h-48 lg:flex-1">
             <div ref={hostRef} className="absolute inset-0" />
             {!editorReady && (
               // Until CodeMirror loads: the same source, unhighlighted.

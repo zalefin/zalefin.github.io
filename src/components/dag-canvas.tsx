@@ -4,9 +4,10 @@ import { useEffect, useRef } from "react";
 import { layoutGraph } from "@/dag/layout";
 import type { DagGraph } from "@/dag/types";
 
-// A DAG drawn on a canvas behind the page, with data packets flowing through
-// it. Nodes near the pointer light up and packets near it speed up. When the
-// graph changes, nodes glide to their new places and fade in or out.
+// A DAG drawn on a canvas that fills its (positioned) parent, with data
+// packets flowing through it. Nodes near the pointer light up and packets near
+// it speed up. When the graph changes, nodes glide to their new places and
+// fade in or out.
 
 const PACKET_COLORS = [
   "orange",
@@ -17,21 +18,32 @@ const PACKET_COLORS = [
   "purple",
 ] as const;
 
-const NODE_RADIUS = 4;
+const NODE_RADIUS = 5;
 const POINTER_RADIUS = 180;
 const MAX_PACKETS = 28;
 // Margins as a fraction of the screen, along and across the flow.
 const MARGIN_ALONG = 0.07;
 const MARGIN_ACROSS = 0.1;
+// Minimum room per task, in pixels, for each flow direction: `along` between
+// layers and `across` between neighbors in a layer. Labels are centered on
+// their nodes, so flowing top to bottom needs a label's width across.
+const SPACING = {
+  horizontal: { along: 110, across: 80 },
+  vertical: { along: 60, across: 150 },
+};
 
 type SceneNode = {
   id: string;
   operator: string;
-  // Placement (see NodePlacement), easing toward its target.
+  // Placement (see NodePlacement). `u` and `v` ease toward `tu` and the
+  // across-the-flow position worked out from slot, size and jitter.
   u: number;
   v: number;
   tu: number;
-  tv: number;
+  layer: number;
+  slot: number;
+  size: number;
+  jitter: number;
   alpha: number;
   targetAlpha: number;
   pulse: number;
@@ -85,13 +97,14 @@ function readPalette(): Palette {
   };
 }
 
-export function DagBackground({
+export function DagCanvas({
   graph,
   variant = "flow",
 }: {
   graph: DagGraph;
   variant?: Variant;
 }) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const graphRef = useRef(graph);
   const setGraphRef = useRef<((graph: DagGraph) => void) | null>(null);
@@ -102,9 +115,10 @@ export function DagBackground({
   }, [graph]);
 
   useEffect(() => {
+    const wrapper = wrapperRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
+    if (!wrapper || !canvas || !ctx) return;
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const nodes = new Map<string, SceneNode>();
@@ -112,7 +126,7 @@ export function DagBackground({
     let outgoing = new Map<string, string[]>();
     let sources: string[] = [];
     let palette = readPalette();
-    let font = "";
+    let fontFamily = "";
     let width = 0;
     let height = 0;
     let packets: Packet[] = [];
@@ -122,19 +136,49 @@ export function DagBackground({
     let nextSpawn = 0;
 
     const readFont = () => {
-      const family = getComputedStyle(document.body).fontFamily;
-      font = `11px ${family}`;
+      fontFamily = getComputedStyle(document.body).fontFamily;
     };
     readFont();
 
-    // Portrait screens flow top to bottom; everything else left to right.
-    const vertical = () => height > width * 1.15;
+    // Layers and widest layer of the current graph, and the flow direction
+    // that fits it best in the canvas.
+    let shape = { layers: 1, widest: 1 };
+    let flowsDown = false;
+    const vertical = () => flowsDown;
+    function chooseDirection() {
+      const room = (d: keyof typeof SPACING) => {
+        const [along, across] =
+          d === "vertical" ? [height, width] : [width, height];
+        return Math.min(
+          (along * (1 - 2 * MARGIN_ALONG)) / (shape.layers * SPACING[d].along),
+          (across * (1 - 2 * MARGIN_ACROSS)) /
+            (shape.widest * SPACING[d].across),
+        );
+      };
+      flowsDown = room("vertical") > room("horizontal");
+    }
     const pos = (n: SceneNode): [number, number] => {
       const along = MARGIN_ALONG + (1 - 2 * MARGIN_ALONG) * n.u;
       const across = MARGIN_ACROSS + (1 - 2 * MARGIN_ACROSS) * n.v;
       return vertical()
         ? [across * width, along * height]
         : [along * width, across * height];
+    };
+    // Spread a layer's tasks so neighbors are about LAYER_GAP apart, keeping
+    // small layers bunched in the middle.
+    const targetV = (n: SceneNode) => {
+      const across = (vertical() ? width : height) * (1 - 2 * MARGIN_ACROSS);
+      const min = SPACING[vertical() ? "vertical" : "horizontal"].across;
+      // Use up to ~3/4 of the room the widest layer leaves, within reason.
+      const gap = Math.min(
+        min * 2.5,
+        Math.max(min, (across * 0.75) / Math.max(1, shape.widest - 1)),
+      );
+      const spread =
+        n.size <= 1
+          ? 0
+          : Math.min(1, (gap * (n.size - 1)) / Math.max(across, 1));
+      return 0.5 + (n.slot - 0.5) * spread + n.jitter * 0.03;
     };
     const curve = (e: SceneEdge) => {
       const [ax, ay] = pos(nodes.get(e.from)!);
@@ -156,27 +200,35 @@ export function DagBackground({
 
     function setGraph(next: DagGraph) {
       const placements = layoutGraph(next);
+      const all = [...placements.values()];
+      shape = {
+        layers: Math.max(1, ...all.map((p) => p.layer + 1)),
+        widest: Math.max(1, ...all.map((p) => p.size)),
+      };
+      chooseDirection();
       const live = new Set<string>();
       for (const task of next.tasks) {
-        const { u, v } = placements.get(task.id)!;
+        const { u, ...placement } = placements.get(task.id)!;
         live.add(task.id);
         const node = nodes.get(task.id);
         if (node) {
-          Object.assign(node, { tu: u, tv: v, targetAlpha: 1 });
+          Object.assign(node, placement, { tu: u, targetAlpha: 1 });
           node.operator = task.operator;
         } else {
-          nodes.set(task.id, {
+          const added: SceneNode = {
             id: task.id,
             operator: task.operator,
             u,
-            v,
+            v: 0,
             tu: u,
-            tv: v,
+            ...placement,
             alpha: 0,
             targetAlpha: 1,
             pulse: 0,
             pulseColor: "",
-          });
+          };
+          added.v = targetV(added);
+          nodes.set(task.id, added);
         }
       }
       for (const node of nodes.values()) {
@@ -214,7 +266,7 @@ export function DagBackground({
       const k = 1 - Math.exp(-dt * 5);
       for (const [id, n] of nodes) {
         n.u += (n.tu - n.u) * k;
-        n.v += (n.tv - n.v) * k;
+        n.v += (targetV(n) - n.v) * k;
         n.alpha += (n.targetAlpha - n.alpha) * k;
         n.pulse = Math.max(0, n.pulse - dt * 1.6);
         if (n.targetAlpha === 0 && n.alpha < 0.01) nodes.delete(id);
@@ -228,11 +280,12 @@ export function DagBackground({
 
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      width = window.innerWidth;
-      height = window.innerHeight;
+      width = wrapper!.clientWidth;
+      height = wrapper!.clientHeight;
       canvas!.width = Math.round(width * dpr);
       canvas!.height = Math.round(height * dpr);
       ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      chooseDirection();
       if (reduceMotion.matches) draw();
     }
 
@@ -287,13 +340,13 @@ export function DagBackground({
 
     function draw() {
       ctx!.clearRect(0, 0, width, height);
-      ctx!.lineWidth = 1;
+      ctx!.lineWidth = 1.25;
 
       for (const e of edges.values()) {
         const p = curve(e);
         const near = Math.max(nearness(p[0], p[1]), nearness(p[6], p[7]));
         ctx!.strokeStyle = palette.faint;
-        ctx!.globalAlpha = (0.16 + 0.24 * near) * e.alpha;
+        ctx!.globalAlpha = (0.3 + 0.3 * near) * e.alpha;
         ctx!.beginPath();
         ctx!.moveTo(p[0], p[1]);
         ctx!.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
@@ -310,23 +363,25 @@ export function DagBackground({
           const t = pk.t - i * trailStep;
           if (t < 0) continue;
           const [x, y] = pointAt(p, t);
-          ctx!.globalAlpha = 0.5 * (1 - i / 7) * e.alpha;
+          ctx!.globalAlpha = 0.6 * (1 - i / 7) * e.alpha;
           ctx!.beginPath();
-          ctx!.arc(x, y, 1.6, 0, Math.PI * 2);
+          ctx!.arc(x, y, 1.9, 0, Math.PI * 2);
           ctx!.fill();
         }
         const [x, y] = pointAt(p, pk.t);
-        ctx!.globalAlpha = 0.18 * e.alpha;
+        ctx!.globalAlpha = 0.22 * e.alpha;
         ctx!.beginPath();
-        ctx!.arc(x, y, 6, 0, Math.PI * 2);
+        ctx!.arc(x, y, 7, 0, Math.PI * 2);
         ctx!.fill();
         ctx!.globalAlpha = 0.95 * e.alpha;
         ctx!.beginPath();
-        ctx!.arc(x, y, 2.4, 0, Math.PI * 2);
+        ctx!.arc(x, y, 2.8, 0, Math.PI * 2);
         ctx!.fill();
       }
 
-      ctx!.font = font;
+      // A notch smaller on phone-sized canvases, where layers are tighter.
+      ctx!.font = `${width < 520 ? 10.5 : 12}px ${fontFamily}`;
+      ctx!.lineJoin = "round";
       ctx!.textBaseline = "top";
       for (const n of nodes.values()) {
         const [x, y] = pos(n);
@@ -346,25 +401,42 @@ export function DagBackground({
         ctx!.arc(x, y, NODE_RADIUS, 0, Math.PI * 2);
         ctx!.fill();
         ctx!.strokeStyle = n.pulse > 0.2 ? n.pulseColor : palette.faint;
-        ctx!.globalAlpha = (0.45 + 0.55 * Math.max(near, n.pulse)) * n.alpha;
+        ctx!.globalAlpha = (0.7 + 0.3 * Math.max(near, n.pulse)) * n.alpha;
         ctx!.stroke();
 
-        // The task id, plus its operator when the pointer is close. Labels
-        // that would run off the right edge flip to the node's left.
-        const labelWidth = ctx!.measureText(n.id).width;
-        const flip = x + 8 + labelWidth > width - 8;
-        const labelX = flip ? x - 8 - labelWidth : x + 8;
-        ctx!.fillStyle = near > 0.05 ? palette.fg : palette.faint;
-        ctx!.globalAlpha = (0.25 + 0.65 * near) * n.alpha;
-        ctx!.fillText(n.id, labelX, y + 6);
+        // The task id, plus its operator when the pointer is close.
+        // Each is outlined in the background color so edges don't cut
+        // through the text.
+        const [idX, idY, opX, opY] = labelPosition(n, x, y);
+        const label = (text: string, lx: number, ly: number, color: string) => {
+          ctx!.strokeStyle = palette.bg;
+          ctx!.lineWidth = 4;
+          ctx!.strokeText(text, lx, ly);
+          ctx!.fillStyle = color;
+          ctx!.fillText(text, lx, ly);
+        };
+        ctx!.globalAlpha = (0.65 + 0.35 * near) * n.alpha;
+        label(n.id, idX, idY, near > 0.05 ? palette.fg : palette.faint);
         if (near > 0.05) {
-          const opWidth = ctx!.measureText(n.operator).width;
-          ctx!.fillStyle = palette.faint;
           ctx!.globalAlpha = 0.8 * near * n.alpha;
-          ctx!.fillText(n.operator, flip ? x - 8 - opWidth : x + 8, y + 20);
+          label(n.operator, opX, opY, palette.faint);
         }
+        ctx!.lineWidth = 1.25;
       }
       ctx!.globalAlpha = 1;
+    }
+
+    // Labels are centered on their node: below it when flowing top to bottom,
+    // and alternating above and below by layer when flowing left to right, so
+    // neighboring columns don't collide.
+    function labelPosition(n: SceneNode, x: number, y: number) {
+      const idWidth = ctx!.measureText(n.id).width;
+      const opWidth = ctx!.measureText(n.operator).width;
+      const clampX = (w: number) =>
+        Math.min(Math.max(x - w / 2, 4), width - w - 4);
+      return vertical() || n.layer % 2 === 0
+        ? [clampX(idWidth), y + 10, clampX(opWidth), y + 24]
+        : [clampX(idWidth), y - 23, clampX(opWidth), y - 37];
     }
 
     function frame(now: number) {
@@ -387,7 +459,8 @@ export function DagBackground({
     }
 
     const onPointerMove = (e: PointerEvent) => {
-      pointer = { x: e.clientX, y: e.clientY };
+      const rect = canvas.getBoundingClientRect();
+      pointer = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     };
     const onPointerLeave = () => {
       pointer = null;
@@ -398,13 +471,14 @@ export function DagBackground({
       if (reduceMotion.matches) draw();
     });
 
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(wrapper);
     resize();
     setGraph(graphRef.current);
     setGraphRef.current = setGraph;
     start();
     // Pick up the web font once it has loaded.
     document.fonts?.ready.then(readFont);
-    window.addEventListener("resize", resize);
     window.addEventListener("pointermove", onPointerMove);
     document.documentElement.addEventListener("pointerleave", onPointerLeave);
     document.addEventListener("visibilitychange", start);
@@ -417,7 +491,7 @@ export function DagBackground({
     return () => {
       setGraphRef.current = null;
       cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
+      resizeObserver.disconnect();
       window.removeEventListener("pointermove", onPointerMove);
       document.documentElement.removeEventListener(
         "pointerleave",
@@ -430,9 +504,12 @@ export function DagBackground({
   }, [variant]);
 
   return (
-    <div aria-hidden="true" className="pointer-events-none fixed inset-0 -z-10">
-      <canvas ref={canvasRef} className="size-full" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_55%,var(--bg)_115%)]" />
+    <div
+      ref={wrapperRef}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0"
+    >
+      <canvas ref={canvasRef} className="absolute inset-0 size-full" />
     </div>
   );
 }

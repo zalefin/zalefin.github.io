@@ -1,38 +1,30 @@
-"""A stand-in for the `airflow` package, just enough to build a DAG's shape.
+"""Just enough of a DAG runtime to draw one.
 
-Every `airflow.*` import resolves to a stub module, so real import paths work
-unchanged. Known names (DAG, task, TaskGroup, chain, ...) record tasks and
-their dependencies; any other *Operator or *Sensor name becomes a generic
-operator class, which covers the provider packages. Nothing here runs a task.
+DAG files run with DAG, TaskGroup, task, dag, task_group, chain,
+cross_downstream and Label already defined, so they need no imports. Any other
+CamelCase name is an operator: `Anything(task_id="x")` adds a task, and `>>`
+and `<<` wire tasks together, as in Airflow. Nothing here runs a task.
 
-`compile_dag(source)` executes a DAG file against these stubs and returns its
-graph as JSON.
+`compile_dag(source)` executes a DAG file and returns its graph as JSON.
 """
 
+import builtins
 import functools
-import importlib.abc
-import importlib.machinery
 import json
-import sys
 import traceback
-import types
 
 DAG_FILE = "zachlef_in.py"
 
 
-class AirflowException(Exception):
+class DagException(Exception):
     pass
 
 
-class AirflowSkipException(AirflowException):
+class DuplicateTaskIdFound(DagException):
     pass
 
 
-class DuplicateTaskIdFound(AirflowException):
-    pass
-
-
-class AirflowDagCycleException(AirflowException):
+class DagCycleException(DagException):
     pass
 
 
@@ -75,7 +67,7 @@ def _link(upstream, downstream):
     for up in _ends(upstream, "leaves"):
         for down in _ends(downstream, "roots"):
             if up.dag is None or up.dag is not down.dag:
-                raise AirflowException(
+                raise DagException(
                     "Tried to set relationships between tasks in more than "
                     f"one DAG: {up.task_id!r} and {down.task_id!r}"
                 )
@@ -142,9 +134,6 @@ class DAG:
             self._edge_set.add(key)
             self.edges.append(key)
 
-    def test(self, *args, **kwargs):
-        return None
-
 
 def _qualify(task_id, group):
     return f"{group.group_id}.{task_id}" if group and group.prefix else task_id
@@ -155,9 +144,7 @@ class BaseOperator(_DependencyMixin):
 
     def __init__(self, *args, task_id=None, dag=None, task_group=None, **kwargs):
         if args:
-            raise AirflowException(
-                "Use keyword arguments when initializing operators"
-            )
+            raise DagException("Use keyword arguments when initializing operators")
         if task_id is None:
             raise TypeError(
                 f"{type(self).__name__}() missing required keyword "
@@ -172,20 +159,12 @@ class BaseOperator(_DependencyMixin):
         if group is not None:
             group._children.append(self)
 
-    @property
-    def output(self):
-        return self
-
     @classmethod
     def partial(cls, **kwargs):
         return _PartialOperator(cls, kwargs)
 
     def __repr__(self):
         return f"<Task({self.operator_name}): {self.task_id}>"
-
-
-class BaseSensorOperator(BaseOperator):
-    pass
 
 
 class _PartialOperator:
@@ -196,18 +175,20 @@ class _PartialOperator:
     def expand(self, **kwargs):
         return self._cls(**self._kwargs)
 
-    expand_kwargs = expand
+
+_operators = {}
+
+
+def _operator_class(name):
+    """The operator class for a CamelCase name, made on first use."""
+    if name not in _operators:
+        _operators[name] = type(name, (BaseOperator,), {})
+    return _operators[name]
 
 
 class TaskGroup(_DependencyMixin):
     def __init__(
-        self,
-        group_id=None,
-        *args,
-        dag=None,
-        parent_group=None,
-        prefix_group_id=True,
-        **kwargs,
+        self, group_id=None, *args, dag=None, parent_group=None, prefix_group_id=True
     ):
         if group_id is None:
             raise TypeError("TaskGroup() missing required argument: 'group_id'")
@@ -264,10 +245,6 @@ class Label:
 # Decorators -------------------------------------------------------------------
 
 
-class _DecoratedOperator(BaseOperator):
-    pass
-
-
 def _upstream_refs(value):
     if isinstance(value, (BaseOperator, TaskGroup)):
         return [value]
@@ -288,9 +265,6 @@ class _DecoratedTask:
     def override(self, **kwargs):
         return _DecoratedTask(self._fn, self._display, {**self._kwargs, **kwargs})
 
-    def partial(self, **kwargs):
-        return self
-
     def __call__(self, *args, **kwargs):
         dag = _current_dag()
         group = _current_group()
@@ -300,19 +274,15 @@ class _DecoratedTask:
         while dag is not None and _qualify(task_id, group) in dag.tasks:
             n += 1
             task_id = f"{base}__{n}"
-        op = type(
-            "_DecoratedOperator",
-            (_DecoratedOperator,),
-            {"_display_name": self._display},
-        )(task_id=task_id)
+        op = type("_DecoratedOperator", (BaseOperator,), {"_display_name": self._display})(
+            task_id=task_id
+        )
         for ref in _upstream_refs([args, kwargs]):
             _link(ref, op)
         return op
 
     def expand(self, **kwargs):
         return self(**kwargs)
-
-    expand_kwargs = expand
 
 
 class _TaskDecorator:
@@ -327,7 +297,7 @@ class _TaskDecorator:
         return _DecoratedTask(python_callable, self._display, self._kwargs)
 
     def __getattr__(self, name):
-        # @task.bash, @task.branch, @task.virtualenv, ...
+        # @task.bash, @task.branch, ...
         if name.startswith("__"):
             raise AttributeError(name)
         return _TaskDecorator(f"@task.{name}", self._kwargs)
@@ -379,7 +349,7 @@ def chain(*tasks):
     for up, down in zip(tasks, tasks[1:]):
         if isinstance(up, (list, tuple)) and isinstance(down, (list, tuple)):
             if len(up) != len(down):
-                raise AirflowException(
+                raise DagException(
                     "Chain not supported for different length Iterable. "
                     f"Got {len(up)} and {len(down)}."
                 )
@@ -394,115 +364,29 @@ def cross_downstream(from_tasks, to_tasks):
         _link(up, to_tasks)
 
 
-class Variable:
-    @staticmethod
-    def get(key, default_var=None, **kwargs):
-        return default_var if default_var is not None else f"{{{{ var.value.{key} }}}}"
+# Compiling --------------------------------------------------------------------
 
-
-def days_ago(n, *args, **kwargs):
-    import datetime
-
-    return datetime.datetime.now() - datetime.timedelta(days=n)
-
-
-def get_current_context():
-    return {}
-
-
-# Stub modules -----------------------------------------------------------------
-
-
-class _OpaqueMeta(type):
-    def __getattr__(cls, name):
-        if name.startswith("__"):
-            raise AttributeError(name)
-        return f"{cls.__name__}.{name}"
-
-
-class _Opaque(metaclass=_OpaqueMeta):
-    """Any other airflow class (Param, Asset, TriggerRule, ...): accepts
-    anything, does nothing."""
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def __getattr__(self, name):
-        if name.startswith("__"):
-            raise AttributeError(name)
-        return _Opaque()
-
-    def __call__(self, *args, **kwargs):
-        return _Opaque()
-
-
-_EXPORTS = {
+_PRELUDE = {
     "DAG": DAG,
-    "dag": dag,
-    "task": task,
-    "task_group": task_group,
     "TaskGroup": TaskGroup,
+    "Label": Label,
+    "task": task,
+    "dag": dag,
+    "task_group": task_group,
     "chain": chain,
     "cross_downstream": cross_downstream,
-    "BaseOperator": BaseOperator,
-    "BaseSensorOperator": BaseSensorOperator,
-    "Label": Label,
-    "Variable": Variable,
-    "days_ago": days_ago,
-    "get_current_context": get_current_context,
-    "AirflowException": AirflowException,
-    "AirflowSkipException": AirflowSkipException,
-    "DuplicateTaskIdFound": DuplicateTaskIdFound,
-    "AirflowDagCycleException": AirflowDagCycleException,
 }
 
-_generated = {}
 
+class _Namespace(dict):
+    """A DAG file's globals: the prelude, plus any undefined CamelCase name
+    as an operator class."""
 
-def _stub_class(module, name):
-    key = (module, name)
-    if key not in _generated:
-        if name.endswith(("Operator", "Sensor")):
-            base = BaseOperator
-        elif name.endswith(("Exception", "Error")):
-            base = AirflowException
-        else:
-            base = _Opaque
-        _generated[key] = type(name, (base,), {"__module__": module})
-    return _generated[key]
-
-
-class _StubModule(types.ModuleType):
-    def __getattr__(self, name):
-        if name.startswith("__"):
-            raise AttributeError(name)
-        if name in _EXPORTS:
-            return _EXPORTS[name]
-        if name[:1].isupper():
-            return _stub_class(self.__name__, name)
-        # Lowercase names fall through to the import system, which then
-        # imports them as stub submodules.
-        raise AttributeError(f"module {self.__name__!r} has no attribute {name!r}")
-
-
-class _AirflowFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
-    def find_spec(self, fullname, path, target=None):
-        if fullname == "airflow" or fullname.startswith("airflow."):
-            return importlib.machinery.ModuleSpec(fullname, self, is_package=True)
-        return None
-
-    def create_module(self, spec):
-        return _StubModule(spec.name)
-
-    def exec_module(self, module):
-        pass
-
-
-if not any(isinstance(f, _AirflowFinder) for f in sys.meta_path):
-    sys.meta_path.insert(0, _AirflowFinder())
-
-
-# Compiling --------------------------------------------------------------------
+    def __missing__(self, name):
+        if hasattr(builtins, name) or not name[:1].isupper():
+            raise KeyError(name)
+        self[name] = _operator_class(name)
+        return self[name]
 
 
 def _check_cycles(the_dag):
@@ -515,9 +399,8 @@ def _check_cycles(the_dag):
         if task_id in done:
             return
         if task_id in visiting:
-            raise AirflowDagCycleException(
-                f"Cycle detected in DAG: {the_dag.dag_id}. "
-                f"Faulty task: {task_id}"
+            raise DagCycleException(
+                f"Cycle detected in DAG: {the_dag.dag_id}. Faulty task: {task_id}"
             )
         visiting.add(task_id)
         for child in downstream[task_id]:
@@ -545,9 +428,9 @@ def compile_dag(source):
     _state.__init__()
     try:
         code = compile(source, DAG_FILE, "exec")
-        exec(code, {"__name__": "zachlef_in", "__file__": DAG_FILE})
+        exec(code, _Namespace(_PRELUDE, __name__="zachlef_in", __file__=DAG_FILE))
         if not _state.dags:
-            raise AirflowException(
+            raise DagException(
                 "no DAG found: create one with `with DAG(...):`, "
                 "or call your @dag function"
             )

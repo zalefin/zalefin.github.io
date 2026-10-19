@@ -1,102 +1,62 @@
 """
-The DAG behind zachlef.in.
+zach lefin, as a DAG.
 
-Edit it and press compile (ctrl/cmd + enter). Pyodide runs
-this file in your browser against a stubbed-out airflow, and
-the graph is redrawn from the DAG it defines.
+Nothing to import: any CamelCase name is an operator, so
+make up your own. Edit, then compile (ctrl/cmd + enter) to
+redraw the graph behind the page.
 """
 
-from datetime import datetime
-
-from airflow.sdk import DAG, TaskGroup, task
-from airflow.providers.amazon.aws.operators.athena import (
-    AthenaOperator,
-)
-from airflow.providers.amazon.aws.operators.emr import (
-    EmrAddStepsOperator,
-)
-from airflow.providers.amazon.aws.sensors.emr import (
-    EmrStepSensor,
-)
-from airflow.providers.amazon.aws.sensors.s3 import (
-    S3KeySensor,
-)
-from airflow.providers.common.sql.operators.sql import (
-    SQLCheckOperator,
-)
-from airflow.providers.http.operators.http import (
-    HttpOperator,
-)
-from airflow.providers.standard.operators.empty import (
-    EmptyOperator,
-)
-
-with DAG(
-    dag_id="zachlef_in",
-    schedule="@daily",
-    start_date=datetime(2022, 5, 1),
-    catchup=False,
-    tags=["data-platform", "agentic"],
-):
-    start = EmptyOperator(task_id="start")
-
-    landed = S3KeySensor(
-        task_id="s3_landed",
-        bucket_key="s3://raw/events/{{ ds }}/_SUCCESS",
+with DAG(dag_id="zach_lefin", schedule="@continuous"):
+    # foundations
+    tinkering = CuriositySensor(task_id="tinkering")
+    degree = DegreeOperator(
+        task_id="cs_degree",
+        school="CU Boulder",
     )
-
-    nifi = HttpOperator(
-        task_id="nifi_ingest",
-        endpoint="nifi-api/process-groups/ingest",
-        method="PUT",
+    linux = LinuxOperator(task_id="linux")
+    systems = CourseworkOperator(
+        task_id="c_systems",
+        built=["shell", "malloc", "http_server"],
     )
+    lead = TeamLeadOperator(task_id="team_lead", app="Poke")
 
-    @task
-    def extract():
-        """Pull the day's records from upstream systems."""
-
-    @task
-    def validate(records):
-        """Check every record against its data contract."""
-
-    with TaskGroup("spark") as spark:
-        submit = EmrAddStepsOperator(
-            task_id="submit",
-            job_flow_id="{{ var.value.emr_cluster }}",
-        )
-        wait = EmrStepSensor(
-            task_id="wait",
-            job_flow_id="{{ var.value.emr_cluster }}",
-            step_id="{{ ti.xcom_pull('spark.submit')[0] }}",
-        )
-        submit >> wait
-
-    @task
-    def iceberg_merge():
-        """MERGE INTO the Iceberg tables; schemas evolve."""
-
-    with TaskGroup("checks") as checks:
-        for check in ("row_counts", "freshness", "contracts"):
-            SQLCheckOperator(task_id=check, sql=f"{check}.sql")
-
-    athena = AthenaOperator(
-        task_id="athena_refresh",
-        query="MSCK REPAIR TABLE events",
-        database="analytics",
+    # the work
+    integrations = WebhookOperator(task_id="integrations")
+    homelab = HomelabOperator(
+        task_id="homelab",
+        sso="authentik",
     )
+    migration = MigrationOperator(
+        task_id="airflow_migration",
+        jobs=50_000,
+        dags=300,
+    )
+    ci_cd = PipelineOperator(task_id="ci_cd")
+    platform = LakehouseOperator(
+        task_id="data_platform",
+        tb=250,
+    )
+    spark = SparkOperator(
+        task_id="spark_tuning",
+        speedup="48x",
+    )
+    mentoring = MentorOperator(task_id="mentoring")
 
-    @task
-    def agent_review():
-        """An agent flags anomalies; a human gates fixes."""
+    # now
+    guardrails = GuardrailSensor(task_id="guardrails")
+    mcp = MCPServerOperator(task_id="mcp_servers")
+    agents = AgentOperator(
+        task_id="agents",
+        human_gated=True,
+    )
+    here = YouAreHereOperator(task_id="agentic_engineer")
 
-    @task
-    def publish():
-        """Ship it."""
-
-    raw = extract()
-    start >> [landed, nifi]
-    landed >> raw
-    checked = validate(raw)
-    nifi >> checked
-    checked >> spark >> iceberg_merge() >> checks
-    checks >> [athena, agent_review()] >> publish()
+    tinkering >> linux >> homelab >> [ci_cd, guardrails]
+    degree >> [systems, lead]
+    systems >> homelab
+    lead >> integrations >> migration
+    linux >> migration >> [ci_cd, platform, mentoring]
+    platform >> spark
+    [ci_cd, spark] >> mcp
+    [mcp, guardrails] >> agents
+    [agents, mentoring] >> here

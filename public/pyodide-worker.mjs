@@ -2,16 +2,16 @@
 // bundled: Turbopack emits classic workers, and Pyodide needs a module worker.
 //
 // Protocol (see src/dag/use-dag-compiler.ts):
-//   in:  { type: "load", indexURL, stub }   then   { type: "compile", id, source }
+//   in:  { type: "load", indexURL, runtime }   then   { type: "compile", id, source }
 //   out: { type: "ready", runtime } | { type: "load-error", message }
 //        | { type: "compiled", id, json }
 
 let pyodide = null;
 
-async function load({ indexURL, stub }) {
+async function load({ indexURL, runtime }) {
   const { loadPyodide } = await import(`${indexURL}pyodide.mjs`);
   const py = await loadPyodide({ indexURL });
-  py.runPython(stub);
+  py.runPython(runtime);
   return py;
 }
 

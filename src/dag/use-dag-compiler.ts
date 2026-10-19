@@ -5,7 +5,7 @@ import type { CompileResult } from "./types";
 
 // Messages to and from public/pyodide-worker.mjs.
 type WorkerRequest =
-  | { type: "load"; indexURL: string; stub: string }
+  | { type: "load"; indexURL: string; runtime: string }
   | { type: "compile"; id: number; source: string };
 
 type WorkerResponse =
@@ -83,12 +83,12 @@ export function useDagCompiler() {
         teardown();
       };
     });
-    // The stub is only needed once Python loads, so it's fetched lazily too.
-    import("./generated").then(({ AIRFLOW_STUB, PYODIDE_VERSION }) =>
+    // The runtime is only needed once Python loads, so it's fetched lazily too.
+    import("./generated").then(({ DAG_RUNTIME, PYODIDE_VERSION }) =>
       worker.postMessage({
         type: "load",
         indexURL: `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`,
-        stub: AIRFLOW_STUB,
+        runtime: DAG_RUNTIME,
       } satisfies WorkerRequest),
     );
     return readyRef.current;

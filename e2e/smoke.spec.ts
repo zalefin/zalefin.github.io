@@ -75,7 +75,7 @@ test.describe("DAG editor", () => {
     await page.goto("/");
     await page.getByRole("button", { name: /edit dag/ }).click();
     const status = page.locator("#dag-editor").getByRole("status");
-    await expect(status).toContainText("✓ zachlef_in · 14 tasks", {
+    await expect(status).toContainText("✓ zach_lefin · 16 tasks", {
       timeout: 60_000,
     });
 
@@ -83,16 +83,13 @@ test.describe("DAG editor", () => {
       .locator(".cm-content")
       .fill(
         [
-          "from airflow.sdk import DAG, task",
-          "",
           'with DAG(dag_id="hello"):',
-          "    @task",
-          "    def a(): ...",
+          '    a = MadeUpOperator(task_id="a")',
           "",
           "    @task",
           "    def b(): ...",
           "",
-          "    a() >> b()",
+          "    a >> b()",
         ].join("\n"),
       );
     await page.getByRole("button", { name: "▶ compile" }).click();
@@ -100,14 +97,14 @@ test.describe("DAG editor", () => {
 
     await page
       .locator(".cm-content")
-      .fill('from airflow import DAG\nwith DAG("x"):\n    oops()\n');
+      .fill('with DAG("x"):\n    Fine(task_id="a")\n    oops()\n');
     await page.locator(".cm-content").press("ControlOrMeta+Enter");
     await expect(status).toContainText(
       "NameError: name 'oops' is not defined (line 3)",
     );
 
     await page.getByRole("button", { name: "reset" }).click();
-    await expect(status).toContainText("✓ zachlef_in · 14 tasks");
+    await expect(status).toContainText("✓ zach_lefin · 16 tasks");
   });
 
   test("opens and closes as a dropdown", async ({ page }) => {

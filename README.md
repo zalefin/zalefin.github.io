@@ -10,6 +10,18 @@ pnpm install
 pnpm dev          # http://localhost:3000
 ```
 
+## The DAG editor
+
+The background graph is an Airflow DAG. `src/dag/zachlef_in.py` is the DAG file
+shown in the editor, and `src/dag/airflow_stub.py` is a stand-in `airflow`
+package: real import paths resolve, but only the DAG's shape is recorded.
+
+In the browser, Pyodide (from jsDelivr) runs in a module worker
+(`public/pyodide-worker.mjs`) and compiles the editor's code with the stub.
+`pnpm build` first runs `pnpm dag`, which compiles the shipped DAG the same way
+in Node and writes `src/dag/generated.ts`, so the page can draw the graph before
+Pyodide loads. Run `pnpm dag` after editing either `.py` file.
+
 ## Check
 
 ```sh

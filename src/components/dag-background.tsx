@@ -1,36 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { layoutGraph } from "@/dag/layout";
+import type { DagGraph } from "@/dag/types";
 
-// An ambient, randomly generated DAG with data packets flowing through it,
-// drawn on a canvas behind the page. Nodes near the pointer light up and
-// packets near it speed up.
-
-const LABELS = [
-  "extract",
-  "s3",
-  "spark",
-  "nifi",
-  "airflow",
-  "agent",
-  "validate",
-  "load",
-  "kafka",
-  "iceberg",
-  "athena",
-  "emr",
-  "mcp",
-  "transform",
-  "schema",
-  "sensor",
-  "postgres",
-  "redis",
-  "lambda",
-  "terraform",
-  "docker",
-  "dedupe",
-  "publish",
-];
+// A DAG drawn on a canvas behind the page, with data packets flowing through
+// it. Nodes near the pointer light up and packets near it speed up. When the
+// graph changes, nodes glide to their new places and fade in or out.
 
 const PACKET_COLORS = [
   "orange",
@@ -44,20 +20,32 @@ const PACKET_COLORS = [
 const NODE_RADIUS = 4;
 const POINTER_RADIUS = 180;
 const MAX_PACKETS = 28;
+// Margins as a fraction of the screen, along and across the flow.
+const MARGIN_ALONG = 0.07;
+const MARGIN_ACROSS = 0.1;
 
-type Node = {
-  // Position normalized to 0..1, so a resize only rescales the graph.
-  nx: number;
-  ny: number;
-  label: string;
-  out: number[];
+type SceneNode = {
+  id: string;
+  operator: string;
+  // Placement (see NodePlacement), easing toward its target.
+  u: number;
+  v: number;
+  tu: number;
+  tv: number;
+  alpha: number;
+  targetAlpha: number;
   pulse: number;
   pulseColor: string;
 };
 
-type Edge = { from: number; to: number; length: number };
+type SceneEdge = {
+  from: string;
+  to: string;
+  alpha: number;
+  targetAlpha: number;
+};
 
-type Packet = { edge: number; t: number; speed: number; color: string };
+type Packet = { edge: string; t: number; speed: number; color: string };
 
 type Palette = Record<
   (typeof PACKET_COLORS)[number] | "fg" | "faint" | "bg" | "red",
@@ -66,88 +54,7 @@ type Palette = Record<
 
 type Variant = "flow" | "crashed";
 
-function shuffle<T>(items: T[]): T[] {
-  const a = [...items];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-function layerCountFor(width: number) {
-  return Math.max(4, Math.min(7, Math.round(width / 260)));
-}
-
-function generateGraph(layerCount: number) {
-  const labels = shuffle(LABELS);
-  const nodes: Node[] = [];
-  const layers: number[][] = [];
-
-  for (let l = 0; l < layerCount; l++) {
-    const edgeLayer = l === 0 || l === layerCount - 1;
-    const count = edgeLayer
-      ? 2 + Math.round(Math.random())
-      : 2 + Math.floor(Math.random() * 3);
-    const ids: number[] = [];
-    for (let i = 0; i < count; i++) {
-      const slot = (i + 0.5) / count;
-      nodes.push({
-        nx: 0.06 + (0.88 * l) / (layerCount - 1) + (Math.random() - 0.5) * 0.05,
-        ny: 0.1 + 0.8 * slot + (Math.random() - 0.5) * (0.5 / count),
-        label: labels[nodes.length % labels.length],
-        out: [],
-        pulse: 0,
-        pulseColor: "",
-      });
-      ids.push(nodes.length - 1);
-    }
-    layers.push(ids);
-  }
-
-  const edges: Edge[] = [];
-  const seen = new Set<string>();
-  const connect = (from: number, to: number) => {
-    const key = `${from}-${to}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    nodes[from].out.push(edges.length);
-    edges.push({ from, to, length: 0 });
-  };
-  const byDistance = (from: number, candidates: number[]) =>
-    [...candidates].sort(
-      (a, b) =>
-        Math.abs(nodes[a].ny - nodes[from].ny) -
-        Math.abs(nodes[b].ny - nodes[from].ny),
-    );
-
-  for (let l = 0; l < layerCount - 1; l++) {
-    const next = layers[l + 1];
-    for (const id of layers[l]) {
-      const near = byDistance(id, next);
-      connect(id, near[0]);
-      if (Math.random() < 0.45 && near[1] !== undefined) connect(id, near[1]);
-      if (l < layerCount - 2 && Math.random() < 0.12) {
-        connect(id, byDistance(id, layers[l + 2])[0]);
-      }
-    }
-    // Every node past the first layer needs at least one input.
-    for (const id of next) {
-      if (!edges.some((e) => e.to === id))
-        connect(byDistance(id, layers[l])[0], id);
-    }
-  }
-
-  const sources = nodes.flatMap((_, i) =>
-    edges.some((e) => e.to === i) ? [] : [i],
-  );
-  return { nodes, edges, sources };
-}
-
-function bezierPoints(ax: number, ay: number, bx: number, by: number) {
-  const dx = (bx - ax) * 0.5;
-  return [ax, ay, ax + dx, ay, bx - dx, by, bx, by] as const;
-}
+const edgeKey = (from: string, to: string) => `${from}\u0000${to}`;
 
 function pointAt(p: readonly number[], t: number): [number, number] {
   const u = 1 - t;
@@ -178,8 +85,21 @@ function readPalette(): Palette {
   };
 }
 
-export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
+export function DagBackground({
+  graph,
+  variant = "flow",
+}: {
+  graph: DagGraph;
+  variant?: Variant;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const graphRef = useRef(graph);
+  const setGraphRef = useRef<((graph: DagGraph) => void) | null>(null);
+
+  useEffect(() => {
+    graphRef.current = graph;
+    setGraphRef.current?.(graph);
+  }, [graph]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -187,23 +107,44 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
     if (!canvas || !ctx) return;
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const nodes = new Map<string, SceneNode>();
+    const edges = new Map<string, SceneEdge>();
+    let outgoing = new Map<string, string[]>();
+    let sources: string[] = [];
     let palette = readPalette();
-    let font = `11px ${getComputedStyle(document.body).fontFamily}`;
+    let font = "";
     let width = 0;
     let height = 0;
-    let layerCount = 0;
-    let graph = generateGraph(4);
     let packets: Packet[] = [];
     let pointer: { x: number; y: number } | null = null;
     let raf = 0;
     let last = 0;
     let nextSpawn = 0;
 
-    const pos = (n: Node) => [n.nx * width, n.ny * height] as const;
-    const curve = (e: Edge) => {
-      const [ax, ay] = pos(graph.nodes[e.from]);
-      const [bx, by] = pos(graph.nodes[e.to]);
-      return bezierPoints(ax, ay, bx, by);
+    const readFont = () => {
+      const family = getComputedStyle(document.body).fontFamily;
+      font = `11px ${family}`;
+    };
+    readFont();
+
+    // Portrait screens flow top to bottom; everything else left to right.
+    const vertical = () => height > width * 1.15;
+    const pos = (n: SceneNode): [number, number] => {
+      const along = MARGIN_ALONG + (1 - 2 * MARGIN_ALONG) * n.u;
+      const across = MARGIN_ACROSS + (1 - 2 * MARGIN_ACROSS) * n.v;
+      return vertical()
+        ? [across * width, along * height]
+        : [along * width, across * height];
+    };
+    const curve = (e: SceneEdge) => {
+      const [ax, ay] = pos(nodes.get(e.from)!);
+      const [bx, by] = pos(nodes.get(e.to)!);
+      if (vertical()) {
+        const dy = (by - ay) * 0.5;
+        return [ax, ay, ax, ay + dy, bx, by - dy, bx, by] as const;
+      }
+      const dx = (bx - ax) * 0.5;
+      return [ax, ay, ax + dx, ay, bx - dx, by, bx, by] as const;
     };
     const nearness = (x: number, y: number) =>
       pointer
@@ -213,6 +154,78 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
           )
         : 0;
 
+    function setGraph(next: DagGraph) {
+      const placements = layoutGraph(next);
+      const live = new Set<string>();
+      for (const task of next.tasks) {
+        const { u, v } = placements.get(task.id)!;
+        live.add(task.id);
+        const node = nodes.get(task.id);
+        if (node) {
+          Object.assign(node, { tu: u, tv: v, targetAlpha: 1 });
+          node.operator = task.operator;
+        } else {
+          nodes.set(task.id, {
+            id: task.id,
+            operator: task.operator,
+            u,
+            v,
+            tu: u,
+            tv: v,
+            alpha: 0,
+            targetAlpha: 1,
+            pulse: 0,
+            pulseColor: "",
+          });
+        }
+      }
+      for (const node of nodes.values()) {
+        if (!live.has(node.id)) node.targetAlpha = 0;
+      }
+
+      const liveEdges = new Set<string>();
+      outgoing = new Map();
+      const hasUpstream = new Set<string>();
+      for (const [from, to] of next.edges) {
+        const key = edgeKey(from, to);
+        liveEdges.add(key);
+        const edge = edges.get(key);
+        if (edge) edge.targetAlpha = 1;
+        else edges.set(key, { from, to, alpha: 0, targetAlpha: 1 });
+        outgoing.set(from, [...(outgoing.get(from) ?? []), key]);
+        hasUpstream.add(to);
+      }
+      for (const [key, edge] of edges) {
+        if (!liveEdges.has(key)) edge.targetAlpha = 0;
+      }
+      sources = [...live].filter(
+        (id) => !hasUpstream.has(id) && outgoing.has(id),
+      );
+      packets = packets.filter((pk) => liveEdges.has(pk.edge));
+
+      if (reduceMotion.matches) {
+        settle(Infinity);
+        draw();
+      }
+    }
+
+    // Ease nodes and edges toward their targets; drop the ones that faded out.
+    function settle(dt: number) {
+      const k = 1 - Math.exp(-dt * 5);
+      for (const [id, n] of nodes) {
+        n.u += (n.tu - n.u) * k;
+        n.v += (n.tv - n.v) * k;
+        n.alpha += (n.targetAlpha - n.alpha) * k;
+        n.pulse = Math.max(0, n.pulse - dt * 1.6);
+        if (n.targetAlpha === 0 && n.alpha < 0.01) nodes.delete(id);
+      }
+      for (const [key, e] of edges) {
+        e.alpha += (e.targetAlpha - e.alpha) * k;
+        const gone = !nodes.has(e.from) || !nodes.has(e.to);
+        if (gone || (e.targetAlpha === 0 && e.alpha < 0.01)) edges.delete(key);
+      }
+    }
+
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       width = window.innerWidth;
@@ -220,23 +233,6 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
       canvas!.width = Math.round(width * dpr);
       canvas!.height = Math.round(height * dpr);
       ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const layers = layerCountFor(width);
-      if (layers !== layerCount) {
-        layerCount = layers;
-        graph = generateGraph(layers);
-        packets = [];
-      }
-      for (const e of graph.edges) {
-        const p = curve(e);
-        let len = 0;
-        let [px, py] = pointAt(p, 0);
-        for (let i = 1; i <= 16; i++) {
-          const [x, y] = pointAt(p, i / 16);
-          len += Math.hypot(x - px, y - py);
-          [px, py] = [x, y];
-        }
-        e.length = len;
-      }
       if (reduceMotion.matches) draw();
     }
 
@@ -248,9 +244,9 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
     }
 
     function spawn() {
-      const src =
-        graph.sources[Math.floor(Math.random() * graph.sources.length)];
-      const out = graph.nodes[src].out;
+      if (!sources.length) return;
+      const src = sources[Math.floor(Math.random() * sources.length)];
+      const out = outgoing.get(src) ?? [];
       if (!out.length) return;
       packets.push({
         edge: out[Math.floor(Math.random() * out.length)],
@@ -261,39 +257,43 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
     }
 
     function step(dt: number, now: number) {
+      settle(dt);
       if (now >= nextSpawn && packets.length < MAX_PACKETS) {
         spawn();
         nextSpawn = now + 450 + Math.random() * 700;
       }
       packets = packets.filter((pk) => {
-        const e = graph.edges[pk.edge];
-        const [x, y] = pointAt(curve(e), pk.t);
+        const e = edges.get(pk.edge);
+        if (!e || e.targetAlpha === 0) return false;
+        const p = curve(e);
+        const [x, y] = pointAt(p, pk.t);
+        const length = Math.hypot(p[6] - p[0], p[7] - p[1]) * 1.15;
         const boost = 1 + 1.4 * nearness(x, y);
-        pk.t += (pk.speed * boost * dt) / Math.max(e.length, 1);
+        pk.t += (pk.speed * boost * dt) / Math.max(length, 1);
         if (pk.t < 1) return true;
 
-        const node = graph.nodes[e.to];
+        const node = nodes.get(e.to)!;
         node.pulse = 1;
         node.pulseColor = pk.color;
+        const out = outgoing.get(e.to) ?? [];
         // On the 404 page, packets segfault at nodes now and then.
-        if (!node.out.length || (variant === "crashed" && Math.random() < 0.4))
+        if (!out.length || (variant === "crashed" && Math.random() < 0.4))
           return false;
-        pk.edge = node.out[Math.floor(Math.random() * node.out.length)];
+        pk.edge = out[Math.floor(Math.random() * out.length)];
         pk.t = 0;
         return true;
       });
-      for (const n of graph.nodes) n.pulse = Math.max(0, n.pulse - dt * 1.6);
     }
 
     function draw() {
       ctx!.clearRect(0, 0, width, height);
       ctx!.lineWidth = 1;
 
-      for (const e of graph.edges) {
+      for (const e of edges.values()) {
         const p = curve(e);
         const near = Math.max(nearness(p[0], p[1]), nearness(p[6], p[7]));
         ctx!.strokeStyle = palette.faint;
-        ctx!.globalAlpha = 0.16 + 0.24 * near;
+        ctx!.globalAlpha = (0.16 + 0.24 * near) * e.alpha;
         ctx!.beginPath();
         ctx!.moveTo(p[0], p[1]);
         ctx!.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
@@ -301,25 +301,26 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
       }
 
       for (const pk of packets) {
-        const e = graph.edges[pk.edge];
+        const e = edges.get(pk.edge);
+        if (!e) continue;
         const p = curve(e);
-        const trailStep = 5 / Math.max(e.length, 1);
+        const trailStep = 5 / Math.max(Math.hypot(p[6] - p[0], p[7] - p[1]), 1);
         ctx!.fillStyle = pk.color;
         for (let i = 6; i >= 1; i--) {
           const t = pk.t - i * trailStep;
           if (t < 0) continue;
           const [x, y] = pointAt(p, t);
-          ctx!.globalAlpha = 0.5 * (1 - i / 7);
+          ctx!.globalAlpha = 0.5 * (1 - i / 7) * e.alpha;
           ctx!.beginPath();
           ctx!.arc(x, y, 1.6, 0, Math.PI * 2);
           ctx!.fill();
         }
         const [x, y] = pointAt(p, pk.t);
-        ctx!.globalAlpha = 0.18;
+        ctx!.globalAlpha = 0.18 * e.alpha;
         ctx!.beginPath();
         ctx!.arc(x, y, 6, 0, Math.PI * 2);
         ctx!.fill();
-        ctx!.globalAlpha = 0.95;
+        ctx!.globalAlpha = 0.95 * e.alpha;
         ctx!.beginPath();
         ctx!.arc(x, y, 2.4, 0, Math.PI * 2);
         ctx!.fill();
@@ -327,34 +328,41 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
 
       ctx!.font = font;
       ctx!.textBaseline = "top";
-      for (const n of graph.nodes) {
+      for (const n of nodes.values()) {
         const [x, y] = pos(n);
         const near = nearness(x, y);
 
         if (n.pulse > 0) {
           ctx!.strokeStyle = n.pulseColor;
-          ctx!.globalAlpha = n.pulse * 0.7;
+          ctx!.globalAlpha = n.pulse * 0.7 * n.alpha;
           ctx!.beginPath();
           ctx!.arc(x, y, NODE_RADIUS + (1 - n.pulse) * 12, 0, Math.PI * 2);
           ctx!.stroke();
         }
 
-        ctx!.globalAlpha = 1;
+        ctx!.globalAlpha = n.alpha;
         ctx!.fillStyle = palette.bg;
         ctx!.beginPath();
         ctx!.arc(x, y, NODE_RADIUS, 0, Math.PI * 2);
         ctx!.fill();
         ctx!.strokeStyle = n.pulse > 0.2 ? n.pulseColor : palette.faint;
-        ctx!.globalAlpha = 0.45 + 0.55 * Math.max(near, n.pulse);
+        ctx!.globalAlpha = (0.45 + 0.55 * Math.max(near, n.pulse)) * n.alpha;
         ctx!.stroke();
 
+        // The task id, plus its operator when the pointer is close. Labels
+        // that would run off the right edge flip to the node's left.
+        const labelWidth = ctx!.measureText(n.id).width;
+        const flip = x + 8 + labelWidth > width - 8;
+        const labelX = flip ? x - 8 - labelWidth : x + 8;
         ctx!.fillStyle = near > 0.05 ? palette.fg : palette.faint;
-        ctx!.globalAlpha = 0.25 + 0.65 * near;
-        // Flip labels that would run off the right edge to the node's left.
-        const labelWidth = ctx!.measureText(n.label).width;
-        const labelX =
-          x + 8 + labelWidth > width - 8 ? x - 8 - labelWidth : x + 8;
-        ctx!.fillText(n.label, labelX, y + 6);
+        ctx!.globalAlpha = (0.25 + 0.65 * near) * n.alpha;
+        ctx!.fillText(n.id, labelX, y + 6);
+        if (near > 0.05) {
+          const opWidth = ctx!.measureText(n.operator).width;
+          ctx!.fillStyle = palette.faint;
+          ctx!.globalAlpha = 0.8 * near * n.alpha;
+          ctx!.fillText(n.operator, flip ? x - 8 - opWidth : x + 8, y + 20);
+        }
       }
       ctx!.globalAlpha = 1;
     }
@@ -370,6 +378,7 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
     function start() {
       cancelAnimationFrame(raf);
       if (reduceMotion.matches || document.hidden) {
+        settle(Infinity);
         draw();
         return;
       }
@@ -385,16 +394,16 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
     };
     const themeObserver = new MutationObserver(() => {
       palette = readPalette();
-      font = `11px ${getComputedStyle(document.body).fontFamily}`;
+      readFont();
       if (reduceMotion.matches) draw();
     });
 
     resize();
+    setGraph(graphRef.current);
+    setGraphRef.current = setGraph;
     start();
     // Pick up the web font once it has loaded.
-    document.fonts?.ready.then(() => {
-      font = `11px ${getComputedStyle(document.body).fontFamily}`;
-    });
+    document.fonts?.ready.then(readFont);
     window.addEventListener("resize", resize);
     window.addEventListener("pointermove", onPointerMove);
     document.documentElement.addEventListener("pointerleave", onPointerLeave);
@@ -406,6 +415,7 @@ export function DagBackground({ variant = "flow" }: { variant?: Variant }) {
     });
 
     return () => {
+      setGraphRef.current = null;
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", resize);
       window.removeEventListener("pointermove", onPointerMove);

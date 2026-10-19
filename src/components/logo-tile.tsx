@@ -25,7 +25,6 @@ export const LOGO_ASSEMBLED_AT =
 
 // The underglow is the same LED orange in both themes.
 const LED = "254 128 25";
-const LED_COUNT = 7;
 
 const LIFTED = "drop-shadow(0px 3px 2px rgba(0,0,0,0.35))";
 const PLACED = "drop-shadow(0px 0px 0px rgba(0,0,0,0))";
@@ -89,60 +88,7 @@ export function LogoTile() {
   }, [px, py, reduceMotion]);
 
   return (
-    <div className="relative perspective-[700px]">
-      {/* Orange LEDs under the tile: they flicker on once the logo has
-          assembled, then breathe. */}
-      <motion.div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0"
-        initial={reduceMotion ? false : { opacity: 0 }}
-        animate={{ opacity: reduceMotion ? 1 : [0, 1, 0.2, 1, 0.6, 1] }}
-        transition={{
-          duration: 0.45,
-          delay: LOGO_ASSEMBLED_AT,
-          times: [0, 0.15, 0.3, 0.5, 0.65, 1],
-          ease: "linear",
-        }}
-      >
-        <motion.div
-          className="absolute inset-0"
-          animate={reduceMotion ? undefined : { opacity: [1, 0.7, 1] }}
-          transition={{
-            duration: 3.2,
-            delay: LOGO_ASSEMBLED_AT + 0.45,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
-        >
-          {/* The light thrown on the panel around the tile. */}
-          <motion.div
-            className="absolute -inset-[7%] rounded-[30%] blur-xl"
-            style={{
-              x: underX,
-              y: underY,
-              backgroundColor: `rgb(${LED} / 0.4)`,
-            }}
-          />
-          {/* The strip's own glow, spilling out evenly around the edges. */}
-          <div
-            className="absolute -inset-[1.5%] rounded-[23%] blur-md"
-            style={{ backgroundColor: `rgb(${LED} / 0.75)` }}
-          />
-          {/* The LEDs themselves, half hidden under the bottom edge. */}
-          <div className="absolute inset-x-[16%] -bottom-[1.5%] flex justify-between">
-            {Array.from({ length: LED_COUNT }, (_, i) => (
-              <span
-                key={i}
-                className="size-1.5 rounded-full blur-[1.5px]"
-                style={{
-                  backgroundColor: "rgb(255 220 180)",
-                  boxShadow: `0 0 10px 4px rgb(${LED} / 0.8)`,
-                }}
-              />
-            ))}
-          </div>
-        </motion.div>
-      </motion.div>
+    <div className="perspective-[700px]">
       <motion.div
         initial={reduceMotion ? false : { opacity: 0, scale: 0.92 }}
         animate={{ opacity: 1, scale: 1 }}
@@ -150,6 +96,48 @@ export function LogoTile() {
         style={{ rotateX, rotateY, backgroundColor: LOGO_TILE_COLOR }}
         className="relative size-32 rounded-[22%] ring-1 ring-black/10 transform-3d sm:size-36"
       >
+        {/* Orange LEDs mounted under the tile, so the glow tilts with it and
+            stays behind it. They flicker on once the logo has assembled, then
+            breathe. */}
+        <motion.div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0"
+          style={{ z: -16 }}
+          initial={reduceMotion ? false : { opacity: 0 }}
+          animate={{ opacity: reduceMotion ? 1 : [0, 1, 0.2, 1, 0.6, 1] }}
+          transition={{
+            duration: 0.45,
+            delay: LOGO_ASSEMBLED_AT,
+            times: [0, 0.15, 0.3, 0.5, 0.65, 1],
+            ease: "linear",
+          }}
+        >
+          <motion.div
+            className="absolute inset-0"
+            animate={reduceMotion ? undefined : { opacity: [1, 0.7, 1] }}
+            transition={{
+              duration: 3.2,
+              delay: LOGO_ASSEMBLED_AT + 0.45,
+              repeat: Infinity,
+              ease: "easeInOut",
+            }}
+          >
+            {/* The light thrown on the panel around the tile. */}
+            <motion.div
+              className="absolute -inset-[7%] rounded-[30%] blur-xl"
+              style={{
+                x: underX,
+                y: underY,
+                backgroundColor: `rgb(${LED} / 0.4)`,
+              }}
+            />
+            {/* The strip's own glow, spilling out evenly around the edges. */}
+            <div
+              className="absolute -inset-[1.5%] rounded-[23%] blur-md"
+              style={{ backgroundColor: `rgb(${LED} / 0.75)` }}
+            />
+          </motion.div>
+        </motion.div>
         {/* Pieces travel in from the tile's edges, so clip them to it. */}
         <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
           <motion.div

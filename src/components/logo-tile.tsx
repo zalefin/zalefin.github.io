@@ -87,7 +87,7 @@ export function LogoTile() {
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.35, ease: "easeOut", delay: 0.1 }}
         style={{ rotateX, rotateY, backgroundColor: LOGO_TILE_COLOR }}
-        className="relative size-32 rounded-[22%] shadow-[0_18px_40px_-12px_var(--shadow)] ring-1 ring-black/10 transform-3d sm:size-36 lg:size-28"
+        className="relative size-32 rounded-[22%] shadow-[0_18px_40px_-12px_var(--shadow)] ring-1 ring-black/10 transform-3d sm:size-36"
       >
         {/* Pieces travel in from the tile's edges, so clip them to it. */}
         <div className="absolute inset-0 overflow-hidden rounded-[inherit]">

@@ -19,8 +19,8 @@ type EditorSetup = typeof import("@/dag/editor-setup");
 // The graph stays legible up to about this many tasks.
 const MAX_TASKS = 100;
 
-// Matches Tailwind's lg breakpoint, where the editor is always open in the
-// left column.
+// Screens where Python warms up in the background before the editor is
+// opened. On smaller ones it waits until the dropdown is.
 const WIDE_QUERY = "(min-width: 64rem)";
 const subscribeWide = (onChange: () => void) => {
   const query = window.matchMedia(WIDE_QUERY);
@@ -47,7 +47,10 @@ export function DagEditor({
     () => false,
   );
   const [open, setOpen] = useState(false);
-  const onScreen = wide || open;
+  // CodeMirror mounts on first open and then stays, keeping edits when the
+  // dropdown closes.
+  const [opened, setOpened] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -94,9 +97,31 @@ export function DagEditor({
     runRef.current = run;
   }, [run]);
 
-  // Load CodeMirror once the editor is on screen.
+  function toggle() {
+    setOpen((o) => !o);
+    setOpened(true);
+  }
+
+  function close() {
+    setOpen(false);
+    toggleRef.current?.focus();
+  }
+
+  // Escape closes the dropdown, wherever focus is.
   useEffect(() => {
-    if (!onScreen || viewRef.current) return;
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      toggleRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // Load CodeMirror the first time the dropdown opens.
+  useEffect(() => {
+    if (!opened || viewRef.current) return;
     let cancelled = false;
     import("@/dag/editor-setup").then((setup) => {
       if (cancelled || !hostRef.current || viewRef.current) return;
@@ -111,22 +136,27 @@ export function DagEditor({
     return () => {
       cancelled = true;
     };
-  }, [onScreen]);
+  }, [opened]);
+
+  useEffect(() => {
+    if (open && editorReady) viewRef.current?.focus();
+  }, [open, editorReady]);
 
   useEffect(() => () => viewRef.current?.destroy(), []);
 
-  // Warm up Python once the intro has played and the browser is idle.
+  // Warm up Python once the intro has played and the browser is idle, or
+  // right away when the dropdown opens.
   useEffect(() => {
-    if (!onScreen) return;
+    if (!wide && !opened) return;
     const timer = setTimeout(
       () => {
         if ("requestIdleCallback" in window) requestIdleCallback(preload);
         else preload();
       },
-      wide ? preloadAfter * 1000 : 0,
+      opened ? 0 : preloadAfter * 1000,
     );
     return () => clearTimeout(timer);
-  }, [onScreen, wide, preloadAfter, preload]);
+  }, [wide, opened, preloadAfter, preload]);
 
   // Then compile the shipped DAG, so Pyodide draws the graph rather
   // than the build-time snapshot.
@@ -166,29 +196,41 @@ export function DagEditor({
   }
 
   return (
-    <div className="flex w-full max-w-xl min-w-0 flex-col items-center gap-3 lg:h-full lg:min-h-0 lg:max-w-none">
+    <>
       <button
+        ref={toggleRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-expanded={open}
         aria-controls="dag-editor"
-        className="rounded-lg border border-panel-border bg-panel px-4 py-2 text-sm text-fg-muted backdrop-blur-md transition-colors hover:text-orange lg:hidden"
+        className="fixed top-4 right-16 z-30 flex h-10 items-center gap-2 rounded-full border border-panel-border bg-panel px-4 text-sm text-fg-muted backdrop-blur-md transition-colors hover:text-orange aria-expanded:text-orange"
       >
-        <span className="text-orange">{"</>"}</span>{" "}
-        {open ? "hide the dag" : "edit the dag"}
+        <span className="text-orange">{"</>"}</span> edit dag
       </button>
 
       <motion.section
         id="dag-editor"
         aria-label="Airflow DAG editor"
-        initial={reduceMotion ? false : { opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, delay: 0.35, ease: [0.22, 1, 0.36, 1] }}
-        className={`${open ? "flex" : "hidden"} w-full flex-1 flex-col lg:flex lg:min-h-0`}
+        inert={!open}
+        initial={false}
+        animate={open ? "open" : "closed"}
+        variants={{
+          open: { opacity: 1, y: 0, scale: 1, visibility: "visible" },
+          closed: {
+            opacity: 0,
+            y: reduceMotion ? 0 : -8,
+            scale: reduceMotion ? 1 : 0.98,
+            transitionEnd: { visibility: "hidden" },
+          },
+        }}
+        transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+        style={{ visibility: "hidden", transformOrigin: "top right" }}
+        className="fixed top-16 right-4 z-30 w-[min(34rem,calc(100vw-2rem))]"
       >
         <TerminalWindow
           title="~/dags/zachlef_in.py"
-          className="flex-1 lg:min-h-0"
+          // Nearly opaque: the dropdown sits over the card on small screens.
+          className="bg-bg/95!"
           actions={
             <>
               <span className="hidden text-[11px] text-fg-faint sm:inline">
@@ -202,10 +244,18 @@ export function DagEditor({
               >
                 ▶ compile
               </button>
+              <button
+                type="button"
+                onClick={close}
+                aria-label="Close the DAG editor"
+                className="grid size-6 place-items-center rounded-md text-fg-faint transition-colors hover:text-orange"
+              >
+                ✕
+              </button>
             </>
           }
         >
-          <div className="relative h-80 min-h-0 text-left lg:h-auto lg:min-h-48 lg:flex-1">
+          <div className="relative h-72 text-left sm:h-80">
             <div ref={hostRef} className="absolute inset-0" />
             {!editorReady && (
               // Until CodeMirror loads: the same source, unhighlighted.
@@ -239,6 +289,6 @@ export function DagEditor({
           </div>
         </TerminalWindow>
       </motion.section>
-    </div>
+    </>
   );
 }

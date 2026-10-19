@@ -24,13 +24,8 @@ const MAX_PACKETS = 28;
 // Margins as a fraction of the screen, along and across the flow.
 const MARGIN_ALONG = 0.07;
 const MARGIN_ACROSS = 0.1;
-// Minimum room per task, in pixels, for each flow direction: `along` between
-// layers and `across` between neighbors in a layer. Labels are centered on
-// their nodes, so flowing top to bottom needs a label's width across.
-const SPACING = {
-  horizontal: { along: 110, across: 80 },
-  vertical: { along: 60, across: 150 },
-};
+// Minimum distance, in pixels, between neighbors in a layer.
+const MIN_GAP = 80;
 
 type SceneNode = {
   id: string;
@@ -140,39 +135,20 @@ export function DagCanvas({
     };
     readFont();
 
-    // Layers and widest layer of the current graph, and the flow direction
-    // that fits it best in the canvas.
-    let shape = { layers: 1, widest: 1 };
-    let flowsDown = false;
-    const vertical = () => flowsDown;
-    function chooseDirection() {
-      const room = (d: keyof typeof SPACING) => {
-        const [along, across] =
-          d === "vertical" ? [height, width] : [width, height];
-        return Math.min(
-          (along * (1 - 2 * MARGIN_ALONG)) / (shape.layers * SPACING[d].along),
-          (across * (1 - 2 * MARGIN_ACROSS)) /
-            (shape.widest * SPACING[d].across),
-        );
-      };
-      flowsDown = room("vertical") > room("horizontal");
-    }
-    const pos = (n: SceneNode): [number, number] => {
-      const along = MARGIN_ALONG + (1 - 2 * MARGIN_ALONG) * n.u;
-      const across = MARGIN_ACROSS + (1 - 2 * MARGIN_ACROSS) * n.v;
-      return vertical()
-        ? [across * width, along * height]
-        : [along * width, across * height];
-    };
-    // Spread a layer's tasks so neighbors are about LAYER_GAP apart, keeping
-    // small layers bunched in the middle.
+    // The widest layer in the current graph, which sets the spacing.
+    let widest = 1;
+    // The graph flows left to right.
+    const pos = (n: SceneNode): [number, number] => [
+      (MARGIN_ALONG + (1 - 2 * MARGIN_ALONG) * n.u) * width,
+      (MARGIN_ACROSS + (1 - 2 * MARGIN_ACROSS) * n.v) * height,
+    ];
+    // Spread a layer's tasks to use up to ~3/4 of the height the widest layer
+    // leaves, keeping small layers bunched in the middle.
     const targetV = (n: SceneNode) => {
-      const across = (vertical() ? width : height) * (1 - 2 * MARGIN_ACROSS);
-      const min = SPACING[vertical() ? "vertical" : "horizontal"].across;
-      // Use up to ~3/4 of the room the widest layer leaves, within reason.
+      const across = height * (1 - 2 * MARGIN_ACROSS);
       const gap = Math.min(
-        min * 2.5,
-        Math.max(min, (across * 0.75) / Math.max(1, shape.widest - 1)),
+        MIN_GAP * 2.5,
+        Math.max(MIN_GAP, (across * 0.75) / Math.max(1, widest - 1)),
       );
       const spread =
         n.size <= 1
@@ -183,10 +159,6 @@ export function DagCanvas({
     const curve = (e: SceneEdge) => {
       const [ax, ay] = pos(nodes.get(e.from)!);
       const [bx, by] = pos(nodes.get(e.to)!);
-      if (vertical()) {
-        const dy = (by - ay) * 0.5;
-        return [ax, ay, ax, ay + dy, bx, by - dy, bx, by] as const;
-      }
       const dx = (bx - ax) * 0.5;
       return [ax, ay, ax + dx, ay, bx - dx, by, bx, by] as const;
     };
@@ -200,12 +172,7 @@ export function DagCanvas({
 
     function setGraph(next: DagGraph) {
       const placements = layoutGraph(next);
-      const all = [...placements.values()];
-      shape = {
-        layers: Math.max(1, ...all.map((p) => p.layer + 1)),
-        widest: Math.max(1, ...all.map((p) => p.size)),
-      };
-      chooseDirection();
+      widest = Math.max(1, ...[...placements.values()].map((p) => p.size));
       const live = new Set<string>();
       for (const task of next.tasks) {
         const { u, ...placement } = placements.get(task.id)!;
@@ -285,7 +252,6 @@ export function DagCanvas({
       canvas!.width = Math.round(width * dpr);
       canvas!.height = Math.round(height * dpr);
       ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
-      chooseDirection();
       if (reduceMotion.matches) draw();
     }
 
@@ -426,15 +392,14 @@ export function DagCanvas({
       ctx!.globalAlpha = 1;
     }
 
-    // Labels are centered on their node: below it when flowing top to bottom,
-    // and alternating above and below by layer when flowing left to right, so
-    // neighboring columns don't collide.
+    // Labels are centered on their node, alternating above and below by layer
+    // so neighboring columns don't collide.
     function labelPosition(n: SceneNode, x: number, y: number) {
       const idWidth = ctx!.measureText(n.id).width;
       const opWidth = ctx!.measureText(n.operator).width;
       const clampX = (w: number) =>
         Math.min(Math.max(x - w / 2, 4), width - w - 4);
-      return vertical() || n.layer % 2 === 0
+      return n.layer % 2 === 0
         ? [clampX(idWidth), y + 10, clampX(opWidth), y + 24]
         : [clampX(idWidth), y - 23, clampX(opWidth), y - 37];
     }

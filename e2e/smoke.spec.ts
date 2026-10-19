@@ -73,6 +73,7 @@ test.describe("DAG editor", () => {
   test("compiles the shipped DAG, then edits", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
+    await page.getByRole("button", { name: /edit dag/ }).click();
     const status = page.locator("#dag-editor").getByRole("status");
     await expect(status).toContainText("✓ zachlef_in · 14 tasks", {
       timeout: 60_000,
@@ -109,11 +110,18 @@ test.describe("DAG editor", () => {
     await expect(status).toContainText("✓ zachlef_in · 14 tasks");
   });
 
-  test("is collapsed behind a button on narrow screens", async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
+  test("opens and closes as a dropdown", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator("#dag-editor")).toBeHidden();
-    await page.getByRole("button", { name: /edit the dag/ }).click();
-    await expect(page.locator("#dag-editor")).toBeVisible();
+    const editor = page.locator("#dag-editor");
+    const toggle = page.getByRole("button", { name: /edit dag/ });
+    await expect(editor).toBeHidden();
+    await toggle.click();
+    await expect(editor).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(editor).toBeHidden();
+    await expect(toggle).toBeFocused();
+    await toggle.click();
+    await page.getByRole("button", { name: "Close the DAG editor" }).click();
+    await expect(editor).toBeHidden();
   });
 });

@@ -12,7 +12,7 @@ pnpm dev          # http://localhost:3000
 
 ## The DAG editor
 
-The graph beside the editor is an Airflow DAG. `src/dag/zachlef_in.py` is the DAG file
+The graph behind the page is an Airflow DAG. `src/dag/zachlef_in.py` is the DAG file
 shown in the editor, and `src/dag/airflow_stub.py` is a stand-in `airflow`
 package: real import paths resolve, but only the DAG's shape is recorded.
 

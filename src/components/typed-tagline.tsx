@@ -24,7 +24,7 @@ export function TypedTagline({ text, delay }: { text: string; delay: number }) {
   const shown = reduceMotion ? text : text.slice(0, count);
 
   return (
-    <p className="min-h-[1.5em] text-sm text-fg-muted sm:text-base lg:text-sm">
+    <p className="min-h-[1.5em] text-sm text-fg-muted sm:text-base">
       <span className="sr-only">{text}</span>
       <span aria-hidden="true">
         {shown}

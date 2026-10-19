@@ -9,6 +9,11 @@ redraw the graph behind the page.
 with DAG(dag_id="zach_lefin", schedule="@continuous"):
     # the core
     agentic = AgenticOperator(task_id="agentic_engineering")
+    gitlab = GitLabCIOperator(
+        task_id="gitlab_ci",
+        runners="self_hosted",
+        executors=["docker", "shell"],
+    )
     airflow = OrchestratorOperator(task_id="airflow")
     aws = CloudOperator(task_id="aws")
     linux = LinuxOperator(task_id="linux", level="expert")
@@ -24,6 +29,14 @@ with DAG(dag_id="zach_lefin", schedule="@continuous"):
         human_gated=True,
     )
     rag = ChromaOperator(task_id="retrieval")
+    tests = UnitTestSensor(
+        task_id="unit_tests",
+        required_to_merge=True,
+    )
+    image = DockerBuildOperator(
+        task_id="airflow_image",
+        push_to="registry",
+    )
     provider = AirflowProviderOperator(
         task_id="custom_provider",
         ships=["operators", "sensors"],
@@ -55,7 +68,10 @@ with DAG(dag_id="zach_lefin", schedule="@continuous"):
         task_id="alteryx_migration",
         status="in_progress",
     )
-    ci_cd = PipelineOperator(task_id="ci_cd")
+    dag_pipeline = PipelineOperator(
+        task_id="dag_pipeline",
+        dags=300,
+    )
     dev_env = DockerComposeOperator(task_id="dev_env")
     contracts = DataContractSensor(
         task_id="data_contracts",
@@ -85,19 +101,20 @@ with DAG(dag_id="zach_lefin", schedule="@continuous"):
     [spark, aws] >> lakehouse
     homelab >> sso
     [nifi, review] >> alteryx
-    [migration, homelab] >> ci_cd
-    migration >> dev_env
+    gitlab >> [tests, image]
+    [migration, tests] >> dag_pipeline
+    [migration, image] >> dev_env
     lakehouse >> contracts
     [nifi, alteryx] >> lead
     [migration, dev_env] >> mentoring
     alteryx >> tf_provider
-    [ci_cd, contracts, sso] >> production
+    [dag_pipeline, contracts, sso] >> production
     [lead, mentoring, tf_provider, production] >> end_to_end
 
     # and everything feeds everything else
     aws >> sso
     airflow >> dev_env
-    linux >> ci_cd
+    gitlab >> tf_provider
     guardrails >> nifi
     mcp >> alteryx
     [agentic, homelab] >> tf_provider

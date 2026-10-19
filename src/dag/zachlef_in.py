@@ -93,3 +93,11 @@ with DAG(dag_id="zach_lefin", schedule="@continuous"):
     alteryx >> tf_provider
     [ci_cd, contracts, sso] >> production
     [lead, mentoring, tf_provider, production] >> end_to_end
+
+    # and everything feeds everything else
+    aws >> sso
+    airflow >> dev_env
+    linux >> ci_cd
+    guardrails >> nifi
+    mcp >> alteryx
+    [agentic, homelab] >> tf_provider

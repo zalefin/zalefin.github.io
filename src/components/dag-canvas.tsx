@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { layoutGraph } from "@/dag/layout";
+import { layoutGraph, noise } from "@/dag/layout";
 import type { DagGraph } from "@/dag/types";
 
 // A DAG drawn on a canvas that fills its (positioned) parent, with data
 // packets flowing through it. Nodes near the pointer light up and packets near
-// it speed up. When the graph changes, nodes glide to their new places and
-// fade in or out.
+// it speed up. Nodes are scattered off the grid and drift, and every edge takes
+// its own path, so the graph looks organic rather than laid out. When the
+// graph changes, nodes glide to their new places and fade in or out.
 
 const PACKET_COLORS = [
   "orange",
@@ -26,6 +27,9 @@ const MARGIN_ALONG = 0.07;
 const MARGIN_ACROSS = 0.1;
 // Minimum distance, in pixels, between neighbors in a layer.
 const MIN_GAP = 80;
+// How far, in pixels, nodes wander from their places.
+const DRIFT_X = 10;
+const DRIFT_Y = 14;
 
 type SceneNode = {
   id: string;
@@ -39,6 +43,7 @@ type SceneNode = {
   slot: number;
   size: number;
   jitter: number;
+  seed: number;
   alpha: number;
   targetAlpha: number;
   pulse: number;
@@ -48,6 +53,11 @@ type SceneNode = {
 type SceneEdge = {
   from: string;
   to: string;
+  // Shape: how far the control points reach along the flow (a fraction of
+  // the run), and how far each bows across it, in pixels.
+  reach: number;
+  bow1: number;
+  bow2: number;
   alpha: number;
   targetAlpha: number;
 };
@@ -129,6 +139,8 @@ export function DagCanvas({
     let raf = 0;
     let last = 0;
     let nextSpawn = 0;
+    // Seconds of animation so far, which drives the drift.
+    let clock = 0;
 
     const readFont = () => {
       fontFamily = getComputedStyle(document.body).fontFamily;
@@ -137,13 +149,22 @@ export function DagCanvas({
 
     // The widest layer in the current graph, which sets the spacing.
     let widest = 1;
-    // The graph flows left to right.
-    const pos = (n: SceneNode): [number, number] => [
-      (MARGIN_ALONG + (1 - 2 * MARGIN_ALONG) * n.u) * width,
-      (MARGIN_ACROSS + (1 - 2 * MARGIN_ACROSS) * n.v) * height,
-    ];
+    // The graph flows left to right, each node drifting slowly around its
+    // place at its own pace.
+    const pos = (n: SceneNode): [number, number] => {
+      const w = 0.25 + n.seed * 0.3;
+      return [
+        (MARGIN_ALONG + (1 - 2 * MARGIN_ALONG) * n.u) * width +
+          Math.sin(clock * w + n.seed * 17) * DRIFT_X,
+        (MARGIN_ACROSS + (1 - 2 * MARGIN_ACROSS) * n.v) * height +
+          Math.cos(clock * w * 0.8 + n.seed * 29) * DRIFT_Y,
+      ];
+    };
     // Spread a layer's tasks to use up to ~3/4 of the height the widest layer
-    // leaves, keeping small layers bunched in the middle.
+    // leaves, keeping small layers bunched in the middle. Then shift each
+    // layer up or down, and each task within it by less than half the gap to
+    // its neighbors, so it looks scattered without tasks landing on each
+    // other.
     const targetV = (n: SceneNode) => {
       const across = height * (1 - 2 * MARGIN_ACROSS);
       const gap = Math.min(
@@ -154,13 +175,24 @@ export function DagCanvas({
         n.size <= 1
           ? 0
           : Math.min(1, (gap * (n.size - 1)) / Math.max(across, 1));
-      return 0.5 + (n.slot - 0.5) * spread + n.jitter * 0.03;
+      const shift = noise(`layer ${n.layer}`, 7) * 0.18;
+      const nudge = (n.jitter * gap * 0.6) / Math.max(across, 1);
+      return 0.5 + (n.slot - 0.5) * spread + shift + nudge;
     };
     const curve = (e: SceneEdge) => {
       const [ax, ay] = pos(nodes.get(e.from)!);
       const [bx, by] = pos(nodes.get(e.to)!);
-      const dx = (bx - ax) * 0.5;
-      return [ax, ay, ax + dx, ay, bx - dx, by, bx, by] as const;
+      const dx = (bx - ax) * e.reach;
+      return [
+        ax,
+        ay,
+        ax + dx,
+        ay + e.bow1,
+        bx - dx,
+        by + e.bow2,
+        bx,
+        by,
+      ] as const;
     };
     const nearness = (x: number, y: number) =>
       pointer
@@ -210,7 +242,21 @@ export function DagCanvas({
         liveEdges.add(key);
         const edge = edges.get(key);
         if (edge) edge.targetAlpha = 1;
-        else edges.set(key, { from, to, alpha: 0, targetAlpha: 1 });
+        else {
+          // Bowing both control points the same way arcs the edge; opposite
+          // ways twists it into an S.
+          const bow = noise(key, 4) * 140;
+          const twist = noise(key, 5) < 0 ? -1 : 1;
+          edges.set(key, {
+            from,
+            to,
+            reach: 0.35 + (noise(key, 6) + 0.5) * 0.4,
+            bow1: bow,
+            bow2: bow * twist * 0.6,
+            alpha: 0,
+            targetAlpha: 1,
+          });
+        }
         outgoing.set(from, [...(outgoing.get(from) ?? []), key]);
         hasUpstream.add(to);
       }
@@ -276,6 +322,7 @@ export function DagCanvas({
     }
 
     function step(dt: number, now: number) {
+      clock += dt;
       settle(dt);
       if (now >= nextSpawn && packets.length < MAX_PACKETS) {
         spawn();

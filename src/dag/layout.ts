@@ -12,11 +12,15 @@ export type NodePlacement = {
   slot: number;
   size: number;
   jitter: number;
+  /** A stable 0..1 value for anything else that should vary per task. */
+  seed: number;
 };
 
-// A small, stable per-task offset, so recompiling the same DAG doesn't move
-// anything but the layout still looks hand-placed rather than gridded.
-function jitter(id: string, salt: number) {
+/**
+ * Stable noise in -0.5..0.5 for a string, so recompiling the same DAG doesn't
+ * move anything but the layout still looks scattered rather than gridded.
+ */
+export function noise(id: string, salt: number) {
   let h = 2166136261 ^ salt;
   for (let i = 0; i < id.length; i++)
     h = Math.imul(h ^ id.charCodeAt(i), 16777619);
@@ -67,11 +71,12 @@ export function layoutGraph(graph: DagGraph): Map<string, NodePlacement> {
       const slot = members.length === 1 ? 0.5 : i / (members.length - 1);
       position.set(id, slot);
       placements.set(id, {
-        u: layerCount === 1 ? 0.5 : l / (layerCount - 1) + jitter(id, 1) * 0.02,
+        u: layerCount === 1 ? 0.5 : l / (layerCount - 1) + noise(id, 1) * 0.12,
         layer: l,
         slot,
         size: members.length,
-        jitter: jitter(id, 2),
+        jitter: noise(id, 2),
+        seed: noise(id, 3) + 0.5,
       });
     });
   });

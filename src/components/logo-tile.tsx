@@ -23,6 +23,10 @@ const MACHINE_EASE = [0.65, 0, 0.35, 1] as const;
 export const LOGO_ASSEMBLED_AT =
   ASSEMBLY_START + LOGO_PIECES.length * (STEP_DURATION + STEP_GAP);
 
+// The underglow is the same LED orange in both themes.
+const LED = "254 128 25";
+const LED_COUNT = 7;
+
 const LIFTED = "drop-shadow(0px 3px 2px rgba(0,0,0,0.35))";
 const PLACED = "drop-shadow(0px 0px 0px rgba(0,0,0,0))";
 
@@ -58,7 +62,11 @@ export function LogoTile() {
   );
   const glowX = useTransform(rotateY, [-MAX_TILT, MAX_TILT], [15, 85]);
   const glowY = useTransform(rotateX, [MAX_TILT, -MAX_TILT], [15, 85]);
-  const glow = useMotionTemplate`radial-gradient(circle at ${glowX}% ${glowY}%, rgb(254 128 25 / 0.35), transparent 60%)`;
+  const glow = useMotionTemplate`radial-gradient(circle at ${glowX}% ${glowY}%, rgb(${LED} / 0.35), transparent 60%)`;
+  // The light the LEDs throw on the panel slides against the tilt, as if
+  // the tile hovers above it.
+  const underX = useTransform(rotateY, [-MAX_TILT, MAX_TILT], [10, -10]);
+  const underY = useTransform(rotateX, [MAX_TILT, -MAX_TILT], [-5, 5]);
 
   useEffect(() => {
     if (reduceMotion || !window.matchMedia("(hover: hover)").matches) return;
@@ -81,13 +89,66 @@ export function LogoTile() {
   }, [px, py, reduceMotion]);
 
   return (
-    <div className="perspective-[700px]">
+    <div className="relative perspective-[700px]">
+      {/* Orange LEDs under the tile: they flicker on once the logo has
+          assembled, then breathe. */}
+      <motion.div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        initial={reduceMotion ? false : { opacity: 0 }}
+        animate={{ opacity: reduceMotion ? 1 : [0, 1, 0.2, 1, 0.6, 1] }}
+        transition={{
+          duration: 0.45,
+          delay: LOGO_ASSEMBLED_AT,
+          times: [0, 0.15, 0.3, 0.5, 0.65, 1],
+          ease: "linear",
+        }}
+      >
+        <motion.div
+          className="absolute inset-0"
+          animate={reduceMotion ? undefined : { opacity: [1, 0.7, 1] }}
+          transition={{
+            duration: 3.2,
+            delay: LOGO_ASSEMBLED_AT + 0.45,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+        >
+          {/* The light thrown on the panel below. */}
+          <motion.div
+            className="absolute -inset-x-[18%] top-[45%] -bottom-[42%] rounded-[50%] blur-2xl"
+            style={{
+              x: underX,
+              y: underY,
+              backgroundColor: `rgb(${LED} / 0.5)`,
+            }}
+          />
+          {/* The strip's own glow, spilling out around the tile's edges. */}
+          <div
+            className="absolute inset-x-[4%] top-[30%] -bottom-[8%] rounded-[22%] blur-lg"
+            style={{ backgroundColor: `rgb(${LED} / 0.85)` }}
+          />
+          {/* The LEDs themselves, half hidden under the bottom edge. */}
+          <div className="absolute inset-x-[16%] -bottom-[1.5%] flex justify-between">
+            {Array.from({ length: LED_COUNT }, (_, i) => (
+              <span
+                key={i}
+                className="size-1.5 rounded-full blur-[1.5px]"
+                style={{
+                  backgroundColor: "rgb(255 220 180)",
+                  boxShadow: `0 0 10px 4px rgb(${LED} / 0.8)`,
+                }}
+              />
+            ))}
+          </div>
+        </motion.div>
+      </motion.div>
       <motion.div
         initial={reduceMotion ? false : { opacity: 0, scale: 0.92 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.35, ease: "easeOut", delay: 0.1 }}
         style={{ rotateX, rotateY, backgroundColor: LOGO_TILE_COLOR }}
-        className="relative size-32 rounded-[22%] shadow-[0_18px_40px_-12px_var(--shadow)] ring-1 ring-black/10 transform-3d sm:size-36"
+        className="relative size-32 rounded-[22%] ring-1 ring-black/10 transform-3d sm:size-36"
       >
         {/* Pieces travel in from the tile's edges, so clip them to it. */}
         <div className="absolute inset-0 overflow-hidden rounded-[inherit]">

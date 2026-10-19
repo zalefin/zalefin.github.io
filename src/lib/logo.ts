@@ -9,8 +9,12 @@ type LogoPiece = {
   id: string;
   d: string;
   fill: string;
-  // Where the piece starts before snapping into place, in viewBox units.
-  from: { x: number; y: number; rotate: number };
+  // Assembly: pieces move in one at a time, in `step` order, from `from`
+  // (viewBox units). `path` is the axis order: "yx" travels vertically, then
+  // horizontally, like a gantry; "xy" the other way round.
+  step: number;
+  from: { x: number; y: number };
+  path: "xy" | "yx";
 };
 
 export const LOGO_PIECES: LogoPiece[] = [
@@ -18,25 +22,33 @@ export const LOGO_PIECES: LogoPiece[] = [
     id: "top-bar",
     d: "m 53.275526,95.96863 v 21.42308 l 78.025214,0.21646 21.25968,-20.99029 z",
     fill: "#292929",
-    from: { x: 0, y: -60, rotate: -8 },
+    step: 3,
+    from: { x: 60, y: -25 },
+    path: "xy",
   },
   {
     id: "z-stroke",
     d: "M 155.6286,100.08025 53.38511,201.03137 c 26.190992,0 -13.036567,0 78.57296,0 l 0.21922,-18.5023 H 95.575688 l 60.272142,-59.5103 z",
     fill: "#de7723",
-    from: { x: 60, y: 60, rotate: 10 },
+    step: 2,
+    from: { x: -30, y: 60 },
+    path: "yx",
   },
   {
     id: "l-stem",
     d: "m 156.28611,129.07802 -15.67077,15.47265 v 13.74148 h -13.91737 l -12.16404,12.01025 h 25.31432 v 30.40437 h 16.87622 z",
     fill: "#292929",
-    from: { x: 70, y: 0, rotate: 12 },
+    step: 1,
+    from: { x: 40, y: 40 },
+    path: "xy",
   },
   {
     id: "wedge",
     d: "m 53.71392,124.31717 h 67.28559 l -67.504817,66.65154 z",
     fill: "#999999",
-    from: { x: -70, y: 10, rotate: -12 },
+    step: 0,
+    from: { x: -60, y: -40 },
+    path: "yx",
   },
 ];
 

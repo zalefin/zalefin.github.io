@@ -102,21 +102,23 @@ export function DagEditor({
     setOpened(true);
   }
 
-  function close() {
-    setOpen(false);
-    toggleRef.current?.focus();
-  }
-
   // Escape closes the dropdown, wherever focus is.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setOpen(false);
-      toggleRef.current?.focus();
+      if (e.key === "Escape") setOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // Return focus to the toggle once the dropdown has closed. Doing it here
+  // rather than in the close handlers runs it after any pending effect that
+  // focuses the editor, so the editor can't take focus back.
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) wasOpen.current = true;
+    else if (wasOpen.current) toggleRef.current?.focus();
   }, [open]);
 
   // Load CodeMirror the first time the dropdown opens.
@@ -246,7 +248,7 @@ export function DagEditor({
               </button>
               <button
                 type="button"
-                onClick={close}
+                onClick={() => setOpen(false)}
                 aria-label="Close the DAG editor"
                 className="grid size-6 place-items-center rounded-md text-fg-faint transition-colors hover:text-orange"
               >

@@ -7,284 +7,248 @@ export const PYODIDE_VERSION = "314.0.7";
 
 export const DAG_RUNTIME = "\"\"\"Just enough of a DAG runtime to draw one.\n\nDAG files run with DAG, TaskGroup, task, dag, task_group, chain,\ncross_downstream and Label already defined, so they need no imports. Any other\nCamelCase name is an operator: `Anything(task_id=\"x\")` adds a task, and `>>`\nand `<<` wire tasks together, as in Airflow. Nothing here runs a task.\n\n`compile_dag(source)` executes a DAG file and returns its graph as JSON.\n\"\"\"\n\nimport builtins\nimport functools\nimport json\nimport traceback\n\nDAG_FILE = \"zachlef_in.py\"\n\n\nclass DagException(Exception):\n    pass\n\n\nclass DuplicateTaskIdFound(DagException):\n    pass\n\n\nclass DagCycleException(DagException):\n    pass\n\n\nclass _State:\n    def __init__(self):\n        self.dags = []\n        self.dag_stack = []\n        self.group_stack = []\n\n\n_state = _State()\n\n\ndef _current_dag():\n    return _state.dag_stack[-1] if _state.dag_stack else None\n\n\ndef _current_group():\n    return _state.group_stack[-1] if _state.group_stack else None\n\n\n# Dependencies -----------------------------------------------------------------\n\n\ndef _ends(obj, which):\n    \"\"\"The tasks at one end (\"roots\" or \"leaves\") of obj.\"\"\"\n    if isinstance(obj, (list, tuple, set)):\n        return [t for item in obj for t in _ends(item, which)]\n    if isinstance(obj, BaseOperator):\n        return [obj]\n    if isinstance(obj, TaskGroup):\n        return obj._ends(which)\n    raise TypeError(\n        f\"can't set a dependency on {type(obj).__name__!r}; \"\n        \"expected a task, a TaskGroup or a list of them\"\n    )\n\n\ndef _link(upstream, downstream):\n    for up in _ends(upstream, \"leaves\"):\n        for down in _ends(downstream, \"roots\"):\n            if up.dag is None or up.dag is not down.dag:\n                raise DagException(\n                    \"Tried to set relationships between tasks in more than \"\n                    f\"one DAG: {up.task_id!r} and {down.task_id!r}\"\n                )\n            up.dag._add_edge(up, down)\n\n\nclass _DependencyMixin:\n    def __rshift__(self, other):\n        _link(self, other)\n        return other\n\n    def __lshift__(self, other):\n        _link(other, self)\n        return other\n\n    def __rrshift__(self, other):\n        # [a, b] >> self\n        _link(other, self)\n        return self\n\n    def __rlshift__(self, other):\n        # [a, b] << self\n        _link(self, other)\n        return self\n\n    def set_downstream(self, other):\n        _link(self, other)\n\n    def set_upstream(self, other):\n        _link(other, self)\n\n\n# DAGs, tasks and groups -------------------------------------------------------\n\n\nclass DAG:\n    def __init__(self, dag_id=None, *args, **kwargs):\n        if dag_id is None:\n            raise TypeError(\"DAG() missing required argument: 'dag_id'\")\n        self.dag_id = dag_id\n        self.tasks = {}\n        self.edges = []\n        self._edge_set = set()\n        _state.dags.append(self)\n\n    def __enter__(self):\n        _state.dag_stack.append(self)\n        return self\n\n    def __exit__(self, *exc):\n        _state.dag_stack.pop()\n        return False\n\n    def _add_task(self, task):\n        if task.task_id in self.tasks:\n            raise DuplicateTaskIdFound(\n                f\"Task id {task.task_id!r} has already been added to the DAG\"\n            )\n        self.tasks[task.task_id] = task\n\n    def _add_edge(self, up, down):\n        key = (up.task_id, down.task_id)\n        if key not in self._edge_set:\n            self._edge_set.add(key)\n            self.edges.append(key)\n\n\ndef _qualify(task_id, group):\n    return f\"{group.group_id}.{task_id}\" if group and group.prefix else task_id\n\n\nclass BaseOperator(_DependencyMixin):\n    _display_name = None\n\n    def __init__(self, *args, task_id=None, dag=None, task_group=None, **kwargs):\n        if args:\n            raise DagException(\"Use keyword arguments when initializing operators\")\n        if task_id is None:\n            raise TypeError(\n                f\"{type(self).__name__}() missing required keyword \"\n                \"argument: 'task_id'\"\n            )\n        group = task_group or _current_group()\n        self.task_id = _qualify(task_id, group)\n        self.operator_name = self._display_name or type(self).__name__\n        self.dag = dag or (group.dag if group else None) or _current_dag()\n        if self.dag is not None:\n            self.dag._add_task(self)\n        if group is not None:\n            group._children.append(self)\n\n    @classmethod\n    def partial(cls, **kwargs):\n        return _PartialOperator(cls, kwargs)\n\n    def __repr__(self):\n        return f\"<Task({self.operator_name}): {self.task_id}>\"\n\n\nclass _PartialOperator:\n    def __init__(self, cls, kwargs):\n        self._cls = cls\n        self._kwargs = kwargs\n\n    def expand(self, **kwargs):\n        return self._cls(**self._kwargs)\n\n\n_operators = {}\n\n\ndef _operator_class(name):\n    \"\"\"The operator class for a CamelCase name, made on first use.\"\"\"\n    if name not in _operators:\n        _operators[name] = type(name, (BaseOperator,), {})\n    return _operators[name]\n\n\nclass TaskGroup(_DependencyMixin):\n    def __init__(\n        self, group_id=None, *args, dag=None, parent_group=None, prefix_group_id=True\n    ):\n        if group_id is None:\n            raise TypeError(\"TaskGroup() missing required argument: 'group_id'\")\n        parent = parent_group or _current_group()\n        self.prefix = prefix_group_id\n        self.group_id = _qualify(group_id, parent)\n        self.dag = dag or (parent.dag if parent else None) or _current_dag()\n        self._children = []\n        if parent is not None:\n            parent._children.append(self)\n\n    def __enter__(self):\n        _state.group_stack.append(self)\n        return self\n\n    def __exit__(self, *exc):\n        _state.group_stack.pop()\n        return False\n\n    def _tasks(self):\n        tasks = []\n        for child in self._children:\n            tasks.extend(child._tasks() if isinstance(child, TaskGroup) else [child])\n        return tasks\n\n    def _ends(self, which):\n        tasks = self._tasks()\n        ids = {t.task_id for t in tasks}\n        edges = self.dag.edges if self.dag else []\n        if which == \"roots\":\n            inner = {down for up, down in edges if up in ids and down in ids}\n        else:\n            inner = {up for up, down in edges if up in ids and down in ids}\n        return [t for t in tasks if t.task_id not in inner]\n\n\nclass Label:\n    \"\"\"An edge label: `a >> Label(\"why\") >> b`.\"\"\"\n\n    def __init__(self, label):\n        self.label = label\n        self._upstream = []\n\n    def __rrshift__(self, other):\n        self._upstream.append(other)\n        return self\n\n    def __rshift__(self, other):\n        for up in self._upstream:\n            _link(up, other)\n        return other\n\n\n# Decorators -------------------------------------------------------------------\n\n\ndef _upstream_refs(value):\n    if isinstance(value, (BaseOperator, TaskGroup)):\n        return [value]\n    if isinstance(value, (list, tuple, set)):\n        return [ref for item in value for ref in _upstream_refs(item)]\n    if isinstance(value, dict):\n        return [ref for item in value.values() for ref in _upstream_refs(item)]\n    return []\n\n\nclass _DecoratedTask:\n    def __init__(self, fn, display, kwargs):\n        functools.update_wrapper(self, fn)\n        self._fn = fn\n        self._display = display\n        self._kwargs = kwargs\n\n    def override(self, **kwargs):\n        return _DecoratedTask(self._fn, self._display, {**self._kwargs, **kwargs})\n\n    def __call__(self, *args, **kwargs):\n        dag = _current_dag()\n        group = _current_group()\n        base = self._kwargs.get(\"task_id\") or self._fn.__name__\n        task_id, n = base, 0\n        # Calling the same @task twice gives it a suffix, as in Airflow.\n        while dag is not None and _qualify(task_id, group) in dag.tasks:\n            n += 1\n            task_id = f\"{base}__{n}\"\n        op = type(\"_DecoratedOperator\", (BaseOperator,), {\"_display_name\": self._display})(\n            task_id=task_id\n        )\n        for ref in _upstream_refs([args, kwargs]):\n            _link(ref, op)\n        return op\n\n    def expand(self, **kwargs):\n        return self(**kwargs)\n\n\nclass _TaskDecorator:\n    def __init__(self, display=\"@task\", kwargs=None):\n        self._display = display\n        self._kwargs = kwargs or {}\n\n    def __call__(self, python_callable=None, **kwargs):\n        if python_callable is None:\n            # @task(...) with arguments\n            return _TaskDecorator(self._display, {**self._kwargs, **kwargs})\n        return _DecoratedTask(python_callable, self._display, self._kwargs)\n\n    def __getattr__(self, name):\n        # @task.bash, @task.branch, ...\n        if name.startswith(\"__\"):\n            raise AttributeError(name)\n        return _TaskDecorator(f\"@task.{name}\", self._kwargs)\n\n\ntask = _TaskDecorator()\n\n\ndef _decorator_factory(build):\n    \"\"\"Support both @decorator and @decorator(...).\"\"\"\n\n    def decorator(fn=None, *args, **kwargs):\n        if callable(fn):\n            return build(fn, {})\n        if fn is not None:\n            kwargs = {\"id\": fn, **kwargs}\n        return lambda f: build(f, kwargs)\n\n    return decorator\n\n\ndef _build_dag(fn, kwargs):\n    @functools.wraps(fn)\n    def build(*args, **call_kwargs):\n        dag_id = kwargs.get(\"dag_id\") or kwargs.get(\"id\") or fn.__name__\n        with DAG(dag_id) as new_dag:\n            fn(*args, **call_kwargs)\n        return new_dag\n\n    return build\n\n\ndef _build_task_group(fn, kwargs):\n    @functools.wraps(fn)\n    def build(*args, **call_kwargs):\n        group_id = kwargs.get(\"group_id\") or kwargs.get(\"id\") or fn.__name__\n        with TaskGroup(group_id) as group:\n            fn(*args, **call_kwargs)\n        return group\n\n    return build\n\n\ndag = _decorator_factory(_build_dag)\ntask_group = _decorator_factory(_build_task_group)\n\n\ndef chain(*tasks):\n    for up, down in zip(tasks, tasks[1:]):\n        if isinstance(up, (list, tuple)) and isinstance(down, (list, tuple)):\n            if len(up) != len(down):\n                raise DagException(\n                    \"Chain not supported for different length Iterable. \"\n                    f\"Got {len(up)} and {len(down)}.\"\n                )\n            for u, d in zip(up, down):\n                _link(u, d)\n        else:\n            _link(up, down)\n\n\ndef cross_downstream(from_tasks, to_tasks):\n    for up in from_tasks:\n        _link(up, to_tasks)\n\n\n# Compiling --------------------------------------------------------------------\n\n_PRELUDE = {\n    \"DAG\": DAG,\n    \"TaskGroup\": TaskGroup,\n    \"Label\": Label,\n    \"task\": task,\n    \"dag\": dag,\n    \"task_group\": task_group,\n    \"chain\": chain,\n    \"cross_downstream\": cross_downstream,\n}\n\n\nclass _Namespace(dict):\n    \"\"\"A DAG file's globals: the prelude, plus any undefined CamelCase name\n    as an operator class.\"\"\"\n\n    def __missing__(self, name):\n        if hasattr(builtins, name) or not name[:1].isupper():\n            raise KeyError(name)\n        self[name] = _operator_class(name)\n        return self[name]\n\n\ndef _check_cycles(the_dag):\n    downstream = {task_id: [] for task_id in the_dag.tasks}\n    for up, down in the_dag.edges:\n        downstream[up].append(down)\n    visiting, done = set(), set()\n\n    def visit(task_id):\n        if task_id in done:\n            return\n        if task_id in visiting:\n            raise DagCycleException(\n                f\"Cycle detected in DAG: {the_dag.dag_id}. Faulty task: {task_id}\"\n            )\n        visiting.add(task_id)\n        for child in downstream[task_id]:\n            visit(child)\n        visiting.discard(task_id)\n        done.add(task_id)\n\n    for task_id in the_dag.tasks:\n        visit(task_id)\n\n\ndef _describe(exc):\n    if isinstance(exc, SyntaxError) and exc.filename == DAG_FILE:\n        return {\"error\": f\"SyntaxError: {exc.msg}\", \"line\": exc.lineno}\n    frames = [\n        f for f in traceback.extract_tb(exc.__traceback__) if f.filename == DAG_FILE\n    ]\n    return {\n        \"error\": f\"{type(exc).__name__}: {exc}\",\n        \"line\": frames[-1].lineno if frames else None,\n    }\n\n\ndef compile_dag(source):\n    _state.__init__()\n    try:\n        code = compile(source, DAG_FILE, \"exec\")\n        exec(code, _Namespace(_PRELUDE, __name__=\"zachlef_in\", __file__=DAG_FILE))\n        if not _state.dags:\n            raise DagException(\n                \"no DAG found: create one with `with DAG(...):`, \"\n                \"or call your @dag function\"\n            )\n        the_dag = next((d for d in reversed(_state.dags) if d.tasks), _state.dags[-1])\n        _check_cycles(the_dag)\n        return json.dumps(\n            {\n                \"ok\": True,\n                \"dagId\": the_dag.dag_id,\n                \"tasks\": [\n                    {\"id\": t.task_id, \"operator\": t.operator_name}\n                    for t in the_dag.tasks.values()\n                ],\n                \"edges\": [list(edge) for edge in the_dag.edges],\n            }\n        )\n    except Exception as exc:\n        return json.dumps({\"ok\": False, **_describe(exc)})\n";
 
-export const DEFAULT_DAG_SOURCE = "\"\"\"\nzach lefin, as a DAG.\n\nNothing to import: any CamelCase name is an operator, so\nmake up your own. Edit, then compile (ctrl/cmd + enter) to\nredraw the graph behind the page.\n\"\"\"\n\nwith DAG(dag_id=\"zach_lefin\", schedule=\"@continuous\"):\n    # foundations\n    tinkering = CuriositySensor(task_id=\"tinkering\")\n    dotfiles = DotfilesOperator(\n        task_id=\"dotfiles\",\n        wm=\"dwm\",\n    )\n    plugins = MinecraftPluginOperator(\n        task_id=\"mc_plugins\",\n        lang=\"java\",\n    )\n    linux = LinuxOperator(task_id=\"linux\")\n    degree = DegreeOperator(\n        task_id=\"cs_degree\",\n        school=\"CU Boulder\",\n    )\n    shell = ShellOperator(task_id=\"unix_shell\", lang=\"c\")\n    malloc = AllocatorOperator(task_id=\"malloc\", lang=\"c\")\n    http = HttpServerOperator(\n        task_id=\"http_server\",\n        threads=True,\n    )\n    lead = TeamLeadOperator(task_id=\"team_lead\", app=\"Poke\")\n    tutoring = TutorOperator(task_id=\"tutoring\")\n\n    # the work\n    integrations = WebhookOperator(\n        task_id=\"integrations\",\n        framework=\"django\",\n    )\n    homelab = HomelabOperator(\n        task_id=\"homelab\",\n        sso=\"authentik\",\n    )\n    sso_cli = SamlOperator(task_id=\"sso_cli\", cloud=\"aws\")\n    provider = AirflowProviderOperator(\n        task_id=\"custom_provider\",\n        ships=[\"operators\", \"sensors\"],\n    )\n    migration = MigrationOperator(\n        task_id=\"airflow_migration\",\n        jobs=50_000,\n        dags=300,\n    )\n    dev_env = DockerComposeOperator(task_id=\"dev_env\")\n    ci_cd = PipelineOperator(task_id=\"ci_cd\")\n    platform = LakehouseOperator(\n        task_id=\"data_platform\",\n        tb=250,\n    )\n    spark = SparkOperator(\n        task_id=\"spark_tuning\",\n        speedup=\"48x\",\n    )\n    contracts = DataContractSensor(\n        task_id=\"data_contracts\",\n        sources=20,\n    )\n    mentoring = MentorOperator(task_id=\"mentoring\")\n\n    # now\n    nifi = NiFiOperator(\n        task_id=\"nifi_migration\",\n        processors=2_000,\n    )\n    guardrails = GuardrailSensor(task_id=\"guardrails\")\n    review = AgentJudgeSensor(task_id=\"agent_review\")\n    mcp = MCPServerOperator(task_id=\"mcp_servers\")\n    rag = ChromaOperator(task_id=\"retrieval\")\n    agents = AgentOperator(\n        task_id=\"agents\",\n        human_gated=True,\n    )\n    here = YouAreHereOperator(task_id=\"agentic_engineer\")\n\n    tinkering >> [dotfiles, plugins]\n    degree >> [shell, malloc, http, lead]\n    [dotfiles, shell] >> linux\n    [plugins, degree] >> lead\n    [lead, http] >> integrations\n    linux >> [homelab, provider]\n    homelab >> [sso_cli, ci_cd, guardrails]\n    [integrations, provider] >> migration\n    migration >> [dev_env, ci_cd, platform, mentoring]\n    [lead, tutoring] >> mentoring\n    [platform, malloc] >> spark\n    platform >> contracts\n    [dev_env, contracts] >> nifi\n    sso_cli >> guardrails >> review\n    nifi >> [mcp, rag]\n    [ci_cd, spark] >> mcp\n    [mcp, rag, review] >> agents\n    [agents, mentoring] >> here\n";
+export const DEFAULT_DAG_SOURCE = "\"\"\"\nzach lefin, as a DAG.\n\nNothing to import: any CamelCase name is an operator, so\nmake up your own. Edit, then compile (ctrl/cmd + enter) to\nredraw the graph behind the page.\n\"\"\"\n\nwith DAG(dag_id=\"zach_lefin\", schedule=\"@continuous\"):\n    # the core\n    agentic = AgenticOperator(task_id=\"agentic_engineering\")\n    airflow = OrchestratorOperator(task_id=\"airflow\")\n    aws = CloudOperator(task_id=\"aws\")\n    linux = LinuxOperator(task_id=\"linux\", level=\"expert\")\n\n    # the tools\n    mcp = MCPServerOperator(task_id=\"mcp_servers\")\n    guardrails = GuardrailSensor(\n        task_id=\"guardrails\",\n        layers=[\"steering\", \"hard_gates\"],\n    )\n    acp = ACPClientOperator(\n        task_id=\"acp_client\",\n        human_gated=True,\n    )\n    rag = ChromaOperator(task_id=\"retrieval\")\n    provider = AirflowProviderOperator(\n        task_id=\"custom_provider\",\n        ships=[\"operators\", \"sensors\"],\n    )\n    spark = SparkOperator(task_id=\"spark\", speedup=\"48x\")\n    homelab = HomelabOperator(task_id=\"homelab\")\n\n    # the work\n    nifi = NiFiOperator(\n        task_id=\"nifi_migration\",\n        processors=2_000,\n    )\n    review = AgentJudgeSensor(task_id=\"agent_review\")\n    migration = MigrationOperator(\n        task_id=\"airflow_migration\",\n        jobs=50_000,\n        dags=300,\n        manual_effort=\"-95%\",\n    )\n    lakehouse = IcebergOperator(\n        task_id=\"lakehouse\",\n        tb=250,\n    )\n    sso = IdentityOperator(\n        task_id=\"sso\",\n        protocols=[\"saml\", \"oidc\"],\n    )\n    alteryx = MigrationOperator(\n        task_id=\"alteryx_migration\",\n        status=\"in_progress\",\n    )\n    ci_cd = PipelineOperator(task_id=\"ci_cd\")\n    dev_env = DockerComposeOperator(task_id=\"dev_env\")\n    contracts = DataContractSensor(\n        task_id=\"data_contracts\",\n        sources=20,\n    )\n\n    # the result\n    lead = TeamLeadOperator(task_id=\"team_lead\")\n    mentoring = MentorOperator(\n        task_id=\"mentoring\",\n        trained=45,\n    )\n    tf_provider = TerraformOperator(\n        task_id=\"tf_provider\",\n        written_by=\"agent\",\n    )\n    production = ReliabilitySensor(task_id=\"production\")\n    end_to_end = OwnershipOperator(task_id=\"end_to_end\")\n\n    agentic >> [mcp, guardrails, acp, rag]\n    airflow >> provider\n    aws >> spark\n    linux >> homelab\n    [mcp, acp, rag] >> nifi\n    guardrails >> review\n    [provider, linux] >> migration\n    [spark, aws] >> lakehouse\n    homelab >> sso\n    [nifi, review] >> alteryx\n    [migration, homelab] >> ci_cd\n    migration >> dev_env\n    lakehouse >> contracts\n    [nifi, alteryx] >> lead\n    [migration, dev_env] >> mentoring\n    alteryx >> tf_provider\n    [ci_cd, contracts, sso] >> production\n    [lead, mentoring, tf_provider, production] >> end_to_end\n";
 
 export const DEFAULT_GRAPH: DagGraph = {
   "dagId": "zach_lefin",
   "tasks": [
     {
-      "id": "tinkering",
-      "operator": "CuriositySensor"
+      "id": "agentic_engineering",
+      "operator": "AgenticOperator"
     },
     {
-      "id": "dotfiles",
-      "operator": "DotfilesOperator"
+      "id": "airflow",
+      "operator": "OrchestratorOperator"
     },
     {
-      "id": "mc_plugins",
-      "operator": "MinecraftPluginOperator"
+      "id": "aws",
+      "operator": "CloudOperator"
     },
     {
       "id": "linux",
       "operator": "LinuxOperator"
     },
     {
-      "id": "cs_degree",
-      "operator": "DegreeOperator"
-    },
-    {
-      "id": "unix_shell",
-      "operator": "ShellOperator"
-    },
-    {
-      "id": "malloc",
-      "operator": "AllocatorOperator"
-    },
-    {
-      "id": "http_server",
-      "operator": "HttpServerOperator"
-    },
-    {
-      "id": "team_lead",
-      "operator": "TeamLeadOperator"
-    },
-    {
-      "id": "tutoring",
-      "operator": "TutorOperator"
-    },
-    {
-      "id": "integrations",
-      "operator": "WebhookOperator"
-    },
-    {
-      "id": "homelab",
-      "operator": "HomelabOperator"
-    },
-    {
-      "id": "sso_cli",
-      "operator": "SamlOperator"
-    },
-    {
-      "id": "custom_provider",
-      "operator": "AirflowProviderOperator"
-    },
-    {
-      "id": "airflow_migration",
-      "operator": "MigrationOperator"
-    },
-    {
-      "id": "dev_env",
-      "operator": "DockerComposeOperator"
-    },
-    {
-      "id": "ci_cd",
-      "operator": "PipelineOperator"
-    },
-    {
-      "id": "data_platform",
-      "operator": "LakehouseOperator"
-    },
-    {
-      "id": "spark_tuning",
-      "operator": "SparkOperator"
-    },
-    {
-      "id": "data_contracts",
-      "operator": "DataContractSensor"
-    },
-    {
-      "id": "mentoring",
-      "operator": "MentorOperator"
-    },
-    {
-      "id": "nifi_migration",
-      "operator": "NiFiOperator"
+      "id": "mcp_servers",
+      "operator": "MCPServerOperator"
     },
     {
       "id": "guardrails",
       "operator": "GuardrailSensor"
     },
     {
-      "id": "agent_review",
-      "operator": "AgentJudgeSensor"
-    },
-    {
-      "id": "mcp_servers",
-      "operator": "MCPServerOperator"
+      "id": "acp_client",
+      "operator": "ACPClientOperator"
     },
     {
       "id": "retrieval",
       "operator": "ChromaOperator"
     },
     {
-      "id": "agents",
-      "operator": "AgentOperator"
+      "id": "custom_provider",
+      "operator": "AirflowProviderOperator"
     },
     {
-      "id": "agentic_engineer",
-      "operator": "YouAreHereOperator"
+      "id": "spark",
+      "operator": "SparkOperator"
+    },
+    {
+      "id": "homelab",
+      "operator": "HomelabOperator"
+    },
+    {
+      "id": "nifi_migration",
+      "operator": "NiFiOperator"
+    },
+    {
+      "id": "agent_review",
+      "operator": "AgentJudgeSensor"
+    },
+    {
+      "id": "airflow_migration",
+      "operator": "MigrationOperator"
+    },
+    {
+      "id": "lakehouse",
+      "operator": "IcebergOperator"
+    },
+    {
+      "id": "sso",
+      "operator": "IdentityOperator"
+    },
+    {
+      "id": "alteryx_migration",
+      "operator": "MigrationOperator"
+    },
+    {
+      "id": "ci_cd",
+      "operator": "PipelineOperator"
+    },
+    {
+      "id": "dev_env",
+      "operator": "DockerComposeOperator"
+    },
+    {
+      "id": "data_contracts",
+      "operator": "DataContractSensor"
+    },
+    {
+      "id": "team_lead",
+      "operator": "TeamLeadOperator"
+    },
+    {
+      "id": "mentoring",
+      "operator": "MentorOperator"
+    },
+    {
+      "id": "tf_provider",
+      "operator": "TerraformOperator"
+    },
+    {
+      "id": "production",
+      "operator": "ReliabilitySensor"
+    },
+    {
+      "id": "end_to_end",
+      "operator": "OwnershipOperator"
     }
   ],
   "edges": [
     [
-      "tinkering",
-      "dotfiles"
+      "agentic_engineering",
+      "mcp_servers"
     ],
     [
-      "tinkering",
-      "mc_plugins"
+      "agentic_engineering",
+      "guardrails"
     ],
     [
-      "cs_degree",
-      "unix_shell"
+      "agentic_engineering",
+      "acp_client"
     ],
     [
-      "cs_degree",
-      "malloc"
+      "agentic_engineering",
+      "retrieval"
     ],
     [
-      "cs_degree",
-      "http_server"
+      "airflow",
+      "custom_provider"
     ],
     [
-      "cs_degree",
-      "team_lead"
-    ],
-    [
-      "dotfiles",
-      "linux"
-    ],
-    [
-      "unix_shell",
-      "linux"
-    ],
-    [
-      "mc_plugins",
-      "team_lead"
-    ],
-    [
-      "team_lead",
-      "integrations"
-    ],
-    [
-      "http_server",
-      "integrations"
+      "aws",
+      "spark"
     ],
     [
       "linux",
       "homelab"
     ],
     [
-      "linux",
-      "custom_provider"
-    ],
-    [
-      "homelab",
-      "sso_cli"
-    ],
-    [
-      "homelab",
-      "ci_cd"
-    ],
-    [
-      "homelab",
-      "guardrails"
-    ],
-    [
-      "integrations",
-      "airflow_migration"
-    ],
-    [
-      "custom_provider",
-      "airflow_migration"
-    ],
-    [
-      "airflow_migration",
-      "dev_env"
-    ],
-    [
-      "airflow_migration",
-      "ci_cd"
-    ],
-    [
-      "airflow_migration",
-      "data_platform"
-    ],
-    [
-      "airflow_migration",
-      "mentoring"
-    ],
-    [
-      "team_lead",
-      "mentoring"
-    ],
-    [
-      "tutoring",
-      "mentoring"
-    ],
-    [
-      "data_platform",
-      "spark_tuning"
-    ],
-    [
-      "malloc",
-      "spark_tuning"
-    ],
-    [
-      "data_platform",
-      "data_contracts"
-    ],
-    [
-      "dev_env",
+      "mcp_servers",
       "nifi_migration"
     ],
     [
-      "data_contracts",
+      "acp_client",
       "nifi_migration"
     ],
     [
-      "sso_cli",
-      "guardrails"
+      "retrieval",
+      "nifi_migration"
     ],
     [
       "guardrails",
       "agent_review"
     ],
     [
-      "nifi_migration",
-      "mcp_servers"
+      "custom_provider",
+      "airflow_migration"
+    ],
+    [
+      "linux",
+      "airflow_migration"
+    ],
+    [
+      "spark",
+      "lakehouse"
+    ],
+    [
+      "aws",
+      "lakehouse"
+    ],
+    [
+      "homelab",
+      "sso"
     ],
     [
       "nifi_migration",
-      "retrieval"
-    ],
-    [
-      "ci_cd",
-      "mcp_servers"
-    ],
-    [
-      "spark_tuning",
-      "mcp_servers"
-    ],
-    [
-      "mcp_servers",
-      "agents"
-    ],
-    [
-      "retrieval",
-      "agents"
+      "alteryx_migration"
     ],
     [
       "agent_review",
-      "agents"
+      "alteryx_migration"
     ],
     [
-      "agents",
-      "agentic_engineer"
+      "airflow_migration",
+      "ci_cd"
+    ],
+    [
+      "homelab",
+      "ci_cd"
+    ],
+    [
+      "airflow_migration",
+      "dev_env"
+    ],
+    [
+      "lakehouse",
+      "data_contracts"
+    ],
+    [
+      "nifi_migration",
+      "team_lead"
+    ],
+    [
+      "alteryx_migration",
+      "team_lead"
+    ],
+    [
+      "airflow_migration",
+      "mentoring"
+    ],
+    [
+      "dev_env",
+      "mentoring"
+    ],
+    [
+      "alteryx_migration",
+      "tf_provider"
+    ],
+    [
+      "ci_cd",
+      "production"
+    ],
+    [
+      "data_contracts",
+      "production"
+    ],
+    [
+      "sso",
+      "production"
+    ],
+    [
+      "team_lead",
+      "end_to_end"
     ],
     [
       "mentoring",
-      "agentic_engineer"
+      "end_to_end"
+    ],
+    [
+      "tf_provider",
+      "end_to_end"
+    ],
+    [
+      "production",
+      "end_to_end"
     ]
   ]
 };

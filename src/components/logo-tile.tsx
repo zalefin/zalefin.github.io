@@ -35,11 +35,21 @@ const POWER_ON: Transition = {
   ease: "linear",
 };
 
-// A thin light strip wrapped around the tile's edge, as a ring with a little
-// glow of its own.
-const STRIP_OFF = `0 0 0 1px rgb(0 0 0 / 0.1), 0 0 0px 0px rgb(${LED} / 0)`;
-const STRIP_DIM = `0 0 0 1px rgb(255 200 150 / 0.5), 0 0 3px 0px rgb(${LED} / 0.3)`;
-const STRIP_ON = `0 0 0 1px rgb(255 200 150), 0 0 6px 0px rgb(${LED} / 0.7)`;
+// A neon strip wrapped around the tile's edge: a white-hot core, an orange
+// halo around it, and a little light spilling onto the tile. Every level has
+// the same shadows, so they animate between each other.
+function neon(level: number) {
+  return [
+    `0 0 0 2px rgb(255 248 238 / ${level})`,
+    `0 0 3px 2px rgb(255 214 168 / ${level})`,
+    `0 0 10px 3px rgb(${LED} / ${0.9 * level})`,
+    `0 0 26px 6px rgb(${LED} / ${0.5 * level})`,
+    `inset 0 0 8px 0px rgb(${LED} / ${0.5 * level})`,
+  ].join(", ");
+}
+const STRIP_OFF = neon(0);
+const STRIP_DIM = neon(0.35);
+const STRIP_ON = neon(1);
 
 const LIFTED = "drop-shadow(0px 3px 2px rgba(0,0,0,0.35))";
 const PLACED = "drop-shadow(0px 0px 0px rgba(0,0,0,0))";

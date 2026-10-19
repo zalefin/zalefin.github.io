@@ -75,7 +75,7 @@ test.describe("DAG editor", () => {
     await page.goto("/");
     await page.getByRole("button", { name: /edit dag/ }).click();
     const status = page.locator("#dag-editor").getByRole("status");
-    await expect(status).toContainText("✓ zach_lefin · 16 tasks", {
+    await expect(status).toContainText("✓ zach_lefin · 28 tasks", {
       timeout: 60_000,
     });
 
@@ -104,7 +104,7 @@ test.describe("DAG editor", () => {
     );
 
     await page.getByRole("button", { name: "reset" }).click();
-    await expect(status).toContainText("✓ zach_lefin · 16 tasks");
+    await expect(status).toContainText("✓ zach_lefin · 28 tasks");
   });
 
   test("opens and closes as a dropdown", async ({ page }) => {

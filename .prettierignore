@@ -1,0 +1,8 @@
+.next
+out
+node_modules
+pnpm-lock.yaml
+AGENTS.md
+playwright-report
+test-results
+src/dag/generated.ts

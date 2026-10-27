@@ -120,34 +120,20 @@ export function LogoTile() {
   return (
     <div className="perspective-[700px]">
       <motion.div
-        initial={
-          reduceMotion
-            ? false
-            : { opacity: 0, scale: 0.92, boxShadow: STRIP_OFF }
-        }
-        animate={{
-          opacity: 1,
-          scale: 1,
-          boxShadow: reduceMotion
-            ? STRIP_ON
-            : [STRIP_OFF, STRIP_ON, STRIP_DIM, STRIP_ON, STRIP_DIM, STRIP_ON],
-        }}
-        transition={{
-          duration: 0.35,
-          ease: "easeOut",
-          delay: 0.1,
-          boxShadow: POWER_ON,
-        }}
-        style={{ rotateX, rotateY, backgroundColor: LOGO_TILE_COLOR }}
-        className="relative size-32 rounded-[22%] transform-3d sm:size-36"
+        initial={reduceMotion ? false : { opacity: 0, scale: 0.92 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.35, ease: "easeOut", delay: 0.1 }}
+        style={{ rotateX, rotateY }}
+        className="relative size-32 sm:size-36"
       >
         {/* Orange LEDs mounted under the tile, so the glow tilts with it and
             stays behind it. They flicker on once the logo has assembled, then
-            breathe. */}
+            breathe. The glow comes before the tile rather than sitting behind
+            it in 3D: Safari paints 3D layers in the wrong order and stops
+            redrawing the logo while it assembles. */}
         <motion.div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0"
-          style={{ z: -16 }}
           initial={reduceMotion ? false : { opacity: 0 }}
           animate={{ opacity: reduceMotion ? 1 : [0, 1, 0.2, 1, 0.6, 1] }}
           transition={POWER_ON}
@@ -179,7 +165,17 @@ export function LogoTile() {
           </motion.div>
         </motion.div>
         {/* Pieces travel in from the tile's edges, so clip them to it. */}
-        <div className="absolute inset-0 overflow-hidden rounded-[inherit]">
+        <motion.div
+          initial={reduceMotion ? false : { boxShadow: STRIP_OFF }}
+          animate={{
+            boxShadow: reduceMotion
+              ? STRIP_ON
+              : [STRIP_OFF, STRIP_ON, STRIP_DIM, STRIP_ON, STRIP_DIM, STRIP_ON],
+          }}
+          transition={POWER_ON}
+          style={{ backgroundColor: LOGO_TILE_COLOR }}
+          className="absolute inset-0 overflow-hidden rounded-[22%]"
+        >
           <motion.div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 rounded-[inherit]"
@@ -216,7 +212,7 @@ export function LogoTile() {
               );
             })}
           </svg>
-        </div>
+        </motion.div>
       </motion.div>
     </div>
   );

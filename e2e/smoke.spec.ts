@@ -5,7 +5,7 @@ test("renders the name, tagline and logo", async ({ page }) => {
   await expect(page).toHaveTitle("zach lefin");
   await expect(page.getByRole("heading", { name: "zach lefin" })).toBeVisible();
   await expect(
-    page.getByText("agentic engineer, tinkerer, and linux enjoyer"),
+    page.getByText("software engineer, tinkerer, and linux enjoyer"),
   ).toBeAttached();
   await expect(
     page.getByRole("img", { name: "Zach Lefin logo" }),

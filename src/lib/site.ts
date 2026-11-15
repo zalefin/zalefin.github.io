@@ -1,6 +1,6 @@
 export const SITE = {
   name: "zach lefin",
-  tagline: "agentic engineer, tinkerer, and linux enjoyer",
+  tagline: "software engineer, tinkerer, and linux enjoyer",
   url: "https://zachlef.in",
   email: "zachlefin@gmail.com",
   github: "https://github.com/zalefin",
